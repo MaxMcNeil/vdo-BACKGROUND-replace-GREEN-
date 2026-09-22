@@ -1,0 +1,89 @@
+name: Replace Green Screen Background
+
+on:
+  # Se déclenche automatiquement quand tu changes l'image de fond dans input/
+  push:
+    paths:
+      - 'input/**'
+  # Lancement manuel : tu précises le tag de la Release qui contient la vidéo
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Tag de la Release contenant la vidéo (ex: v1)'
+        required: true
+      video_asset:
+        description: "Nom du fichier vidéo attaché à cette Release (ex: video.mp4)"
+        required: true
+      background_file:
+        description: 'Nom du fichier image de fond dans input/ (ex: background.jpg)'
+        required: false
+        default: 'background.jpg'
+
+jobs:
+  replace-background:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout du repo
+        uses: actions/checkout@v4
+
+      - name: Installer FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Préparer les noms de fichiers
+        id: files
+        run: |
+          BG="${{ github.event.inputs.background_file || 'background.jpg' }}"
+          echo "bg=$BG" >> "$GITHUB_OUTPUT"
+
+      - name: Télécharger la vidéo depuis la Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p input
+          gh release download "${{ github.event.inputs.release_tag }}" \
+            --repo "${{ github.repository }}" \
+            --pattern "${{ github.event.inputs.video_asset }}" \
+            --output "input/video.mp4" \
+            --clobber
+
+      - name: Vérifier que les fichiers existent
+        run: |
+          test -f "input/video.mp4" || (echo "Vidéo introuvable — vérifie le tag/nom d'asset de la Release" && exit 1)
+          test -f "input/${{ steps.files.outputs.bg }}" || (echo "Image de fond introuvable dans input/" && exit 1)
+
+      - name: Composer la vidéo (chromakey + despill + anti-glitch)
+        run: |
+          mkdir -p output
+
+          ffmpeg -y \
+            -i "input/video.mp4" \
+            -i "input/${{ steps.files.outputs.bg }}" \
+            -filter_complex "\
+              [1:v]scale=1920:1080,setsar=1[bg]; \
+              [0:v]scale=1920:1080,setsar=1, \
+              chromakey=0x00B140:0.12:0.08, \
+              despill=type=green:mix=0.5:expand=0, \
+              eq=saturation=1.05[fg]; \
+              [bg][fg]overlay=shortest=1:format=auto[out]" \
+            -map "[out]" -map 0:a? \
+            -c:v libx264 -preset slow -crf 17 -pix_fmt yuv420p \
+            -c:a aac -b:a 192k \
+            output/result.mp4
+
+      - name: Upload du résultat en artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-fond-remplace
+          path: output/result.mp4
+          retention-days: 14
+
+      - name: Publier le résultat comme Release (gère les gros fichiers)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="result-${{ github.run_number }}"
+          gh release create "$TAG" \
+            --repo "${{ github.repository }}" \
+            --title "Résultat run #${{ github.run_number }}" \
+            --notes "Vidéo fond remplacé, générée automatiquement." \
+            "output/result.mp4"

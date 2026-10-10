@@ -50,28 +50,51 @@ jobs:
           test -f "input/video.mp4" || (echo "Vidéo introuvable — vérifie le tag/nom d'asset de la Release" && exit 1)
           test -f "input/${{ steps.files.outputs.bg }}" || (echo "Image de fond introuvable dans input/" && exit 1)
 
-      - name: Composer la vidéo (chromakey + despill anti-liseré)
+      - name: Générer la table de couleurs (dé-mélange du vert)
+        run: |
+          # Pour chaque couleur RGB possible : estime la part de fond vert dans le pixel,
+          # reconstruit la vraie couleur du sujet (surtout utile sur les doigts flous),
+          # puis plafonne le vert/bleu résiduel. Pixels sombres (cheveux) préservés.
+          cat > mklut.py <<'PY'
+          N = 65
+          K = (19.0, 157.0, 116.0)   # couleur du tissu vert (#139D74)
+          EK = 87.0                  # excès de vert d'un pixel 100% tissu
+          THR = 115.0                # seuil de luminosité pour appliquer le dé-mélange
+          def f(r, g, b):
+              a = 1 - max(g - (r + b) / 2, 0) / EK
+              a = min(max(a, 0.4), 1.0)
+              if (r + g + b) / 3 > THR:
+                  r = min(max((r - (1 - a) * K[0]) / a, 0), 255)
+                  g = min(max((g - (1 - a) * K[1]) / a, 0), 255)
+                  b = min(max((b - (1 - a) * K[2]) / a, 0), 255)
+              g = min(g, (r + b) / 2)
+              b = min(b, r)
+              return r, g, b
+          with open("unmix.cube", "w") as o:
+              o.write('TITLE "unmix"\nLUT_3D_SIZE %d\n' % N)
+              for bi in range(N):
+                  for gi in range(N):
+                      for ri in range(N):
+                          r, g, b = f(ri * 255 / (N - 1), gi * 255 / (N - 1), bi * 255 / (N - 1))
+                          o.write("%.5f %.5f %.5f\n" % (r / 255, g / 255, b / 255))
+          PY
+          python3 mklut.py
+          test -s unmix.cube
+
+      - name: Composer la vidéo (chromakey + masque propre + couleurs reconstruites)
         run: |
           mkdir -p output
           BG="input/${{ steps.files.outputs.bg }}"
 
-          # Masque : chromakey serré, puis érosion + léger flou (supprime le liseré des bords flous)
-          # Couleur : le vert est plafonné à la moyenne rouge/bleu et le bleu au rouge
-          #           (anti-halo vert/bleu pour un tissu vert-bleu, sans abîmer la peau)
-          FILTER='
+          # Masque : chromakey serré + érosion + léger flou. Couleur : table unmix.cube.
+          FILTER="
             [1:v]scale=1920:1080,setsar=1[bg];
             [0:v]scale=1920:1080,setsar=1,split=2[a][c];
             [a]format=yuva420p,chromakey=0x139D74:0.10:0.06,alphaextract,erosion,erosion,boxblur=1:1[mat];
-            [c]format=gbrp,extractplanes=r+g+b[r][g][b];
-            [r]split=3[r1][r2][r3];
-            [b]split=2[b1][b2];
-            [r1][b1]blend=all_mode=average[avg];
-            [g][avg]blend=all_mode=darken[g2];
-            [b2][r2]blend=all_mode=darken[b3];
-            [g2][b3][r3]mergeplanes=0x001020:gbrp,format=rgba[cl];
+            [c]format=gbrp,lut3d=file=unmix.cube:interp=tetrahedral,format=rgba[cl];
             [cl][mat]alphamerge[fg];
             [bg][fg]overlay=shortest=1:format=auto[out]
-          '
+          "
 
           ffmpeg -y \
             -i "input/video.mp4" \

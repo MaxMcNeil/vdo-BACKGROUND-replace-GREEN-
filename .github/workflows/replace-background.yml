@@ -57,11 +57,11 @@ jobs:
 
           ffmpeg -y \
             -i "input/video.mp4" \
-            -i "input/${{ steps.files.outputs.bg }}" \
+            -loop 1 -i "input/${{ steps.files.outputs.bg }}" \
             -filter_complex "\
               [1:v]scale=1920:1080,setsar=1[bg]; \
               [0:v]scale=1920:1080,setsar=1, \
-              chromakey=0x00B140:0.12:0.08, \
+              chromakey=0x228C70:0.15:0.10, \
               despill=type=green:mix=0.5:expand=0, \
               eq=saturation=1.05[fg]; \
               [bg][fg]overlay=shortest=1:format=auto[out]" \

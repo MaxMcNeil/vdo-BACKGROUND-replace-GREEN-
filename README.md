@@ -26,21 +26,23 @@ Onglet **Actions** → workflow **Replace Green Screen Background** → **Run wo
 
 ### 4. Récupérer le résultat
 
-Le workflow télécharge la vidéo depuis la Release, la traite avec FFmpeg, puis publie automatiquement une **nouvelle Release** nommée `result-<numéro de run>` contenant `result.mp4`. Le fichier est aussi disponible en artifact pendant 14 jours (onglet Actions > le run > Artifacts) si tu préfères le récupérer rapidement sans passer par les Releases.
+Le workflow télécharge la vidéo depuis la Release, la traite avec FFmpeg, puis publie automatiquement une **nouvelle Release** nommée `result-<numéro de run>` contenant `result.mp4`. Le fichier est aussi disponible en artifact pendant 14 jours (onglet Actions > le run > Artifacts).
 
-## Réglages à ajuster selon ton tournage
-
-Dans `.github/workflows/replace-background.yml`, ligne du filtre `chromakey` :
+## Réglage chromakey — calibré pour ton tissu vert
 
 ```
-chromakey=0x00B140:0.12:0.08
+chromakey=0x228C70:0.15:0.10
 ```
 
-- `0x00B140` = couleur du vert à supprimer. Si le keying est imparfait, prends une capture d'écran de ta vidéo, pipette la couleur exacte de ton tissu vert, et remplace cette valeur.
-- `0.12` = **similarity** (tolérance sur la couleur). Trop bas → il reste du vert. Trop haut → ça mange dans le sujet.
-- `0.08` = **blend** (douceur du dégradé sur les bords). Augmente légèrement (`0.1`-`0.15`) si les contours sont trop durs/dentelés.
+Cette couleur (`#228C70`) a été mesurée directement sur une photo de ton tissu vert — ce n'est pas un vert "studio" classique (plus clair/saturé comme `#00FF00`), donc ne reviens pas à une valeur générique trouvée en ligne.
+
+- `0x228C70` = couleur exacte du tissu, à remesurer si l'éclairage change notablement au tournage
+- `0.15` = **similarity** (tolérance sur la couleur). Trop bas → il reste du vert. Trop haut → ça mange dans le sujet.
+- `0.10` = **blend** (douceur du dégradé sur les bords). Augmente légèrement (`0.12`-`0.15`) si les contours sont trop durs/dentelés.
 
 Le paramètre `despill=mix=0.5` retire la teinte verte résiduelle qui "baverait" sur les cheveux/épaules après le chromakey.
+
+**Astuce fiabilité :** la couleur perçue dépend de l'éclairage réel au tournage. Si le premier résultat garde des traces de vert ou mange trop dans le sujet, extrais une frame de ta vraie vidéo (`ffmpeg -i video.mp4 -frames:v 1 frame.png`) et remesure la couleur dominante du fond dessus plutôt que de garder cette valeur telle quelle.
 
 ## Conseils tournage (déjà bien partis avec 2m de distance)
 

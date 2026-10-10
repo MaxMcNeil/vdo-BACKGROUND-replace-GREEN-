@@ -17,6 +17,10 @@ on:
         description: 'Nom du fichier image de fond dans input/ (ex: background.jpg)'
         required: false
         default: 'background.jpg'
+      key_color:
+        description: 'Couleur du fond vert en hex (ex: 139D74). Laisser vide = mesure automatique'
+        required: false
+        default: ''
 
 jobs:
   replace-background:
@@ -50,16 +54,69 @@ jobs:
           test -f "input/video.mp4" || (echo "Vidéo introuvable — vérifie le tag/nom d'asset de la Release" && exit 1)
           test -f "input/${{ steps.files.outputs.bg }}" || (echo "Image de fond introuvable dans input/" && exit 1)
 
+      - name: Analyser le fond vert (couleur, tolérance, seuil)
+        env:
+          KEY_OVERRIDE: ${{ github.event.inputs.key_color }}
+        run: |
+          cat > analyze.py <<'PY'
+          import os, math, subprocess, statistics as st
+          VIDEO = "input/video.mp4"
+          W, H, N = 192, 108, 12
+          dur = float(subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", VIDEO]).decode().strip())
+          raw = subprocess.check_output(["ffmpeg", "-v", "error", "-i", VIDEO, "-vf", "fps=%.4f,scale=%d:%d:flags=area,format=rgb24" % (N / dur, W, H), "-frames:v", str(N), "-f", "rawvideo", "-"])
+          fs = W * H * 3
+          frames = [raw[i * fs:(i + 1) * fs] for i in range(len(raw) // fs)]
+
+          def exg(p): return p[1] - (p[0] + p[2]) / 2
+          def uvmag(r, g, b):
+              u = -0.169 * r - 0.331 * g + 0.5 * b
+              v = 0.5 * r - 0.419 * g - 0.081 * b
+              return math.hypot(u, v)
+
+          override = os.environ.get("KEY_OVERRIDE", "").strip().lstrip("#").upper()
+          if len(override) == 6:
+              R, G, B = [int(override[i:i + 2], 16) for i in (0, 2, 4)]
+              print("Couleur imposée manuellement :", override)
+          else:
+              # Bords supposés libres : bandeau du haut + colonnes gauche/droite (haut de l'image)
+              px = []
+              for f in frames:
+                  for y in range(H):
+                      for x in range(W):
+                          if y < H * 0.15 or ((x < W * 0.06 or x >= W * 0.94) and y < H * 0.60):
+                              i = (y * W + x) * 3
+                              px.append((f[i], f[i + 1], f[i + 2]))
+              m = [st.median(p[i] for p in px) for i in range(3)]
+              good = [p for p in px if abs(exg(p) - exg(m)) < 40 and p[1] > p[0] and p[1] > p[2]]
+              if len(good) < 0.3 * len(px):
+                  raise SystemExit("Mesure du fond vert peu fiable : relance avec key_color renseigné")
+              R, G, B = [st.median(p[i] for p in good) for i in range(3)]
+              R, G, B = round(R), round(G), round(B)
+
+          EK = max(G - (R + B) / 2, 20.0)
+          # Référence calibrée sur le tissu d'origine (#139D74 -> tolérance 0.10, seuil 100)
+          ref = uvmag(19, 157, 116)
+          SIM = min(max(0.10 * uvmag(R, G, B) / ref, 0.05), 0.16)
+          lum = (R + G + B) / 3
+          THR = min(max(100 * lum / 98.0, 70.0), 150.0)
+          hexk = "%02X%02X%02X" % (R, G, B)
+          print("Fond : #%s  EK=%.1f  tolérance=%.3f  seuil=%.1f" % (hexk, EK, SIM, THR))
+          with open(os.environ["GITHUB_ENV"], "a") as e:
+              e.write("KEY_HEX=%s\nKEY_R=%d\nKEY_G=%d\nKEY_B=%d\nKEY_EK=%.2f\nKEY_SIM=%.3f\nKEY_THR=%.1f\n" % (hexk, R, G, B, EK, SIM, THR))
+          PY
+          python3 analyze.py
+
       - name: Générer la table de couleurs (dé-mélange du vert)
         run: |
           # Pour chaque couleur RGB possible : estime la part de fond vert dans le pixel,
           # reconstruit la vraie couleur du sujet (surtout utile sur les doigts flous),
           # puis plafonne le vert/bleu résiduel. Pixels sombres (cheveux) préservés.
           cat > mklut.py <<'PY'
+          import os
           N = 65
-          K = (19.0, 157.0, 116.0)   # couleur du tissu vert (#139D74)
-          EK = 87.0                  # excès de vert d'un pixel 100% tissu
-          THR = 100.0                # seuil de luminosité pour appliquer le dé-mélange
+          K = (float(os.environ["KEY_R"]), float(os.environ["KEY_G"]), float(os.environ["KEY_B"]))
+          EK = float(os.environ["KEY_EK"])
+          THR = float(os.environ["KEY_THR"])
           def f(r, g, b):
               a = 1 - max(g - (r + b) / 2, 0) / EK
               a = min(max(a, 0.4), 1.0)
@@ -90,7 +147,7 @@ jobs:
           FILTER="
             [1:v]scale=1920:1080,setsar=1[bg];
             [0:v]scale=1920:1080,setsar=1,split=2[a][c];
-            [a]format=yuva420p,chromakey=0x139D74:0.10:0.06,alphaextract,erosion,erosion,erosion,boxblur=1:1[mat];
+            [a]format=yuva420p,chromakey=0x$KEY_HEX:$KEY_SIM:0.06,alphaextract,erosion,erosion,erosion,boxblur=1:1[mat];
             [c]format=gbrp,lut3d=file=unmix.cube:interp=tetrahedral,format=rgba[cl];
             [cl][mat]alphamerge[fg];
             [bg][fg]overlay=shortest=1:format=auto[out]

@@ -1,0 +1,374 @@
+name: Replace Green Screen Background (vidéos longues)
+
+# Traitement identique au workflow principal (mêmes filtres, mêmes réglages),
+# mais la vidéo est découpée en morceaux traités en parallèle, puis recollée.
+# Le résultat est envoyé sur un stockage externe (rclone) : un seul fichier, un seul lien.
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      dest:
+        description: 'Dossier rclone de destination du résultat (ex: gdrive:resultats). Vide = variable RCLONE_DEST du repo'
+        required: false
+        default: ''
+      source:
+        description: 'Vidéo source sur ton stockage rclone (ex: gdrive:videos/long.mp4). Si vide : on utilise la Release ci-dessous'
+        required: false
+        default: ''
+      release_tag:
+        description: 'Tag de la Release contenant la vidéo (si source vide)'
+        required: false
+        default: ''
+      video_asset:
+        description: 'Nom du fichier vidéo dans cette Release (si source vide)'
+        required: false
+        default: ''
+      background_file:
+        description: 'Nom du fichier image de fond dans input/ (ex: background.jpg)'
+        required: false
+        default: 'background.jpg'
+      key_color:
+        description: 'Couleur du fond vert en hex (ex: 139D74). Laisser vide = mesure automatique'
+        required: false
+        default: ''
+      chunk_minutes:
+        description: 'Durée de chaque morceau en minutes (traités en parallèle)'
+        required: false
+        default: '10'
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      key_hex: ${{ steps.plan.outputs.key_hex }}
+      key_r: ${{ steps.plan.outputs.key_r }}
+      key_g: ${{ steps.plan.outputs.key_g }}
+      key_b: ${{ steps.plan.outputs.key_b }}
+      key_ek: ${{ steps.plan.outputs.key_ek }}
+      key_sim: ${{ steps.plan.outputs.key_sim }}
+      key_thr: ${{ steps.plan.outputs.key_thr }}
+      fps: ${{ steps.plan.outputs.fps }}
+      has_audio: ${{ steps.plan.outputs.has_audio }}
+      out_name: ${{ steps.plan.outputs.out_name }}
+    steps:
+      - name: Checkout du repo
+        uses: actions/checkout@v4
+
+      - name: Installer FFmpeg et rclone
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+          curl -fsSL https://rclone.org/install.sh | sudo bash
+
+      - name: Configurer rclone
+        env:
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          if [ -z "$RCLONE_CONFIG_CONTENT" ]; then
+            echo "Secret RCLONE_CONFIG manquant : Settings > Secrets and variables > Actions > New repository secret"
+            echo "Colle-y le contenu de ton fichier rclone.conf (créé avec 'rclone config')."
+            exit 1
+          fi
+          mkdir -p ~/.config/rclone
+          printf '%s\n' "$RCLONE_CONFIG_CONTENT" > ~/.config/rclone/rclone.conf
+
+      - name: Accéder à la vidéo source
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE: ${{ github.event.inputs.source }}
+          RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+          VIDEO_ASSET: ${{ github.event.inputs.video_asset }}
+        run: |
+          mkdir -p input
+          if [ -n "$SOURCE" ]; then
+            DIR="$(dirname "$SOURCE")"; FILE="$(basename "$SOURCE")"
+            [ "$DIR" = "." ] && DIR="${SOURCE%%:*}:"
+            setsid nohup rclone serve http "$DIR" --addr 127.0.0.1:8081 --read-only > rclone-serve.log 2>&1 &
+            ENC="$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1]))' "$FILE")"
+            SRC="http://127.0.0.1:8081/$ENC"
+            for i in $(seq 1 30); do curl -fsI "$SRC" > /dev/null 2>&1 && break; sleep 1; done
+            curl -fsI "$SRC" > /dev/null || { echo "Source introuvable via rclone : $SOURCE"; cat rclone-serve.log; exit 1; }
+            echo "OUT_BASENAME=${FILE%.*}" >> "$GITHUB_ENV"
+          elif [ -n "$RELEASE_TAG" ] && [ -n "$VIDEO_ASSET" ]; then
+            gh release download "$RELEASE_TAG" --repo "${{ github.repository }}" --pattern "$VIDEO_ASSET" --output "input/video.mp4" --clobber
+            SRC="input/video.mp4"
+            echo "OUT_BASENAME=${VIDEO_ASSET%.*}" >> "$GITHUB_ENV"
+          else
+            echo "Renseigne 'source' (rclone) ou 'release_tag' + 'video_asset'."; exit 1
+          fi
+          echo "SRC=$SRC" >> "$GITHUB_ENV"
+          test -f "input/${{ github.event.inputs.background_file || 'background.jpg' }}" || { echo "Image de fond introuvable dans input/"; exit 1; }
+
+      - name: Analyser la vidéo (couleur du fond, tolérance, seuil, découpage)
+        id: plan
+        env:
+          KEY_OVERRIDE: ${{ github.event.inputs.key_color }}
+          CHUNK_MINUTES: ${{ github.event.inputs.chunk_minutes }}
+        run: |
+          cat > plan.py <<'PY'
+          import os, math, json, subprocess, statistics as st
+          SRC = os.environ["SRC"]
+          W, H, N = 192, 108, 12
+
+          def probe(*args):
+              return subprocess.check_output(["ffprobe", "-v", "error", *args, SRC]).decode().strip()
+
+          dur = float(probe("-show_entries", "format=duration", "-of", "csv=p=0"))
+          fps = probe("-select_streams", "v:0", "-show_entries", "stream=avg_frame_rate", "-of", "csv=p=0")
+          has_audio = "true" if probe("-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0") else "false"
+
+          # Cadence constante : on arrondit à la valeur standard la plus proche (ex: 30.05 -> 30)
+          num, den = [float(x) for x in fps.split("/")] if "/" in fps else (float(fps), 1.0)
+          rate = num / den
+          std = {"24000/1001": 23.976, "24": 24.0, "25": 25.0, "30000/1001": 29.97, "30": 30.0,
+                 "50": 50.0, "60000/1001": 59.94, "60": 60.0}
+          best = min(std.items(), key=lambda kv: abs(kv[1] - rate))
+          fps = best[0] if abs(best[1] - rate) / rate < 0.01 else "%.3f" % rate
+
+          # N images prises par recherche directe dans la vidéo (pas de lecture complète)
+          fs = W * H * 3
+          frames = []
+          for k in range(N):
+              t = dur * (k + 0.5) / N
+              raw = subprocess.check_output(["ffmpeg", "-v", "error", "-ss", "%.3f" % t, "-i", SRC, "-frames:v", "1",
+                                             "-vf", "scale=%d:%d:flags=area,format=rgb24" % (W, H), "-f", "rawvideo", "-"])
+              if len(raw) == fs:
+                  frames.append(raw)
+
+          def exg(p): return p[1] - (p[0] + p[2]) / 2
+          def uvmag(r, g, b):
+              u = -0.169 * r - 0.331 * g + 0.5 * b
+              v = 0.5 * r - 0.419 * g - 0.081 * b
+              return math.hypot(u, v)
+
+          override = os.environ.get("KEY_OVERRIDE", "").strip().lstrip("#").upper()
+          if len(override) == 6:
+              R, G, B = [int(override[i:i + 2], 16) for i in (0, 2, 4)]
+              print("Couleur imposée manuellement :", override)
+          else:
+              px = []
+              for f in frames:
+                  for y in range(H):
+                      for x in range(W):
+                          if y < H * 0.15 or ((x < W * 0.06 or x >= W * 0.94) and y < H * 0.60):
+                              i = (y * W + x) * 3
+                              px.append((f[i], f[i + 1], f[i + 2]))
+              m = [st.median(p[i] for p in px) for i in range(3)]
+              good = [p for p in px if abs(exg(p) - exg(m)) < 40 and p[1] > p[0] and p[1] > p[2]]
+              if len(good) < 0.3 * len(px):
+                  raise SystemExit("Mesure du fond vert peu fiable : relance avec key_color renseigné")
+              R, G, B = [st.median(p[i] for p in good) for i in range(3)]
+              R, G, B = round(R), round(G), round(B)
+
+          EK = max(G - (R + B) / 2, 20.0)
+          ref = uvmag(19, 157, 116)
+          SIM = min(max(0.10 * uvmag(R, G, B) / ref, 0.05), 0.16)
+          lum = (R + G + B) / 3
+          THR = min(max(100 * lum / 98.0, 70.0), 150.0)
+          hexk = "%02X%02X%02X" % (R, G, B)
+          print("Fond : #%s  EK=%.1f  tolérance=%.3f  seuil=%.1f" % (hexk, EK, SIM, THR))
+
+          L = max(float(os.environ.get("CHUNK_MINUTES") or 10), 1.0) * 60
+          include, start, idx = [], 0.0, 0
+          while start < dur - 0.05:
+              ln = min(L, dur - start)
+              include.append({"idx": idx, "ss": round(start, 3), "len": round(ln, 3)})
+              start += L; idx += 1
+          print("Durée %.1f s -> %d morceaux de %.0f s max, fps=%s, audio=%s" % (dur, len(include), L, fps, has_audio))
+
+          out = {"matrix": json.dumps({"include": include}), "key_hex": hexk, "key_r": R, "key_g": G, "key_b": B,
+                 "key_ek": "%.2f" % EK, "key_sim": "%.3f" % SIM, "key_thr": "%.1f" % THR, "fps": fps,
+                 "has_audio": has_audio, "out_name": os.environ.get("OUT_BASENAME", "video") + "_fond-remplace.mp4"}
+          with open(os.environ["GITHUB_OUTPUT"], "a") as o:
+              for k, v in out.items():
+                  o.write("%s=%s\n" % (k, v))
+          PY
+          python3 plan.py
+
+  chunks:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 15
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    env:
+      KEY_HEX: ${{ needs.prepare.outputs.key_hex }}
+      KEY_R: ${{ needs.prepare.outputs.key_r }}
+      KEY_G: ${{ needs.prepare.outputs.key_g }}
+      KEY_B: ${{ needs.prepare.outputs.key_b }}
+      KEY_EK: ${{ needs.prepare.outputs.key_ek }}
+      KEY_SIM: ${{ needs.prepare.outputs.key_sim }}
+      KEY_THR: ${{ needs.prepare.outputs.key_thr }}
+    steps:
+      - name: Checkout du repo
+        uses: actions/checkout@v4
+
+      - name: Installer FFmpeg et rclone
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+          curl -fsSL https://rclone.org/install.sh | sudo bash
+
+      - name: Configurer rclone
+        env:
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          mkdir -p ~/.config/rclone
+          printf '%s\n' "$RCLONE_CONFIG_CONTENT" > ~/.config/rclone/rclone.conf
+
+      - name: Accéder à la vidéo source
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE: ${{ github.event.inputs.source }}
+          RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+          VIDEO_ASSET: ${{ github.event.inputs.video_asset }}
+        run: |
+          mkdir -p input
+          if [ -n "$SOURCE" ]; then
+            DIR="$(dirname "$SOURCE")"; FILE="$(basename "$SOURCE")"
+            [ "$DIR" = "." ] && DIR="${SOURCE%%:*}:"
+            setsid nohup rclone serve http "$DIR" --addr 127.0.0.1:8081 --read-only > rclone-serve.log 2>&1 &
+            ENC="$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1]))' "$FILE")"
+            SRC="http://127.0.0.1:8081/$ENC"
+            for i in $(seq 1 30); do curl -fsI "$SRC" > /dev/null 2>&1 && break; sleep 1; done
+            curl -fsI "$SRC" > /dev/null || { echo "Source introuvable via rclone : $SOURCE"; cat rclone-serve.log; exit 1; }
+          else
+            gh release download "$RELEASE_TAG" --repo "${{ github.repository }}" --pattern "$VIDEO_ASSET" --output "input/video.mp4" --clobber
+            SRC="input/video.mp4"
+          fi
+          echo "SRC=$SRC" >> "$GITHUB_ENV"
+
+      - name: Générer la table de couleurs (dé-mélange du vert)
+        run: |
+          cat > mklut.py <<'PY'
+          import os
+          N = 65
+          K = (float(os.environ["KEY_R"]), float(os.environ["KEY_G"]), float(os.environ["KEY_B"]))
+          EK = float(os.environ["KEY_EK"])
+          THR = float(os.environ["KEY_THR"])
+          def f(r, g, b):
+              a = 1 - max(g - (r + b) / 2, 0) / EK
+              a = min(max(a, 0.4), 1.0)
+              if (r + g + b) / 3 > THR:
+                  r = min(max((r - (1 - a) * K[0]) / a, 0), 255)
+                  g = min(max((g - (1 - a) * K[1]) / a, 0), 255)
+                  b = min(max((b - (1 - a) * K[2]) / a, 0), 255)
+              g = min(g, (r + b) / 2)
+              b = min(b, r)
+              return r, g, b
+          with open("unmix.cube", "w") as o:
+              o.write('TITLE "unmix"\nLUT_3D_SIZE %d\n' % N)
+              for bi in range(N):
+                  for gi in range(N):
+                      for ri in range(N):
+                          r, g, b = f(ri * 255 / (N - 1), gi * 255 / (N - 1), bi * 255 / (N - 1))
+                          o.write("%.5f %.5f %.5f\n" % (r / 255, g / 255, b / 255))
+          PY
+          python3 mklut.py
+          test -s unmix.cube
+
+      - name: Composer le morceau (mêmes filtres que le workflow principal)
+        env:
+          IDX: ${{ matrix.idx }}
+          SS: ${{ matrix.ss }}
+          LEN: ${{ matrix.len }}
+          FPS: ${{ needs.prepare.outputs.fps }}
+          HAS_AUDIO: ${{ needs.prepare.outputs.has_audio }}
+        run: |
+          mkdir -p output
+          BG="input/${{ github.event.inputs.background_file || 'background.jpg' }}"
+
+          FILTER="
+            [1:v]scale=1920:1080,setsar=1[bg];
+            [0:v]scale=1920:1080,setsar=1,split=2[a][c];
+            [a]format=yuva420p,chromakey=0x$KEY_HEX:$KEY_SIM:0.06,alphaextract,erosion,erosion,erosion,boxblur=1:1[mat];
+            [c]format=gbrp,lut3d=file=unmix.cube:interp=tetrahedral,format=rgba[cl];
+            [cl][mat]alphamerge[fg];
+            [bg][fg]overlay=shortest=1:format=auto[out]
+          "
+
+          # Audio du morceau en WAV sans perte (recollé sans coupure puis encodé une seule fois)
+          AUDIO_OUT=()
+          if [ "$HAS_AUDIO" = "true" ]; then
+            AUDIO_OUT=(-map 0:a:0 -c:a pcm_s16le -t "$LEN" "output/chunk_$IDX.wav")
+          fi
+
+          ffmpeg -y \
+            -ss "$SS" -t "$LEN" -i "$SRC" \
+            -loop 1 -i "$BG" \
+            -filter_complex "$FILTER" \
+            -map "[out]" \
+            -c:v libx264 -preset slow -crf 17 -pix_fmt yuv420p -r "$FPS" -fps_mode cfr \
+            "output/chunk_$IDX.mp4" \
+            "${AUDIO_OUT[@]}"
+
+      - name: Envoyer le morceau sur le stockage externe
+        env:
+          IDX: ${{ matrix.idx }}
+          DEST: ${{ github.event.inputs.dest || vars.RCLONE_DEST }}
+        run: |
+          TMP="$DEST/.tmp-run-${{ github.run_id }}"
+          rclone copy output/ "$TMP" --include "chunk_$IDX.*" --transfers 2 --retries 5
+
+  assemble:
+    needs: [prepare, chunks]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Libérer de l'espace disque
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - name: Installer FFmpeg et rclone
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+          curl -fsSL https://rclone.org/install.sh | sudo bash
+
+      - name: Configurer rclone
+        env:
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          mkdir -p ~/.config/rclone
+          printf '%s\n' "$RCLONE_CONFIG_CONTENT" > ~/.config/rclone/rclone.conf
+
+      - name: Recoller les morceaux et publier
+        env:
+          DEST: ${{ github.event.inputs.dest || vars.RCLONE_DEST }}
+          MATRIX: ${{ needs.prepare.outputs.matrix }}
+          HAS_AUDIO: ${{ needs.prepare.outputs.has_audio }}
+          OUT_NAME: ${{ needs.prepare.outputs.out_name }}
+        run: |
+          TMP="$DEST/.tmp-run-${{ github.run_id }}"
+          # Les morceaux sont lus directement sur le stockage (pas de double copie sur le disque)
+          setsid nohup rclone serve http "$TMP" --addr 127.0.0.1:8082 --read-only > serve.log 2>&1 &
+          for i in $(seq 1 30); do curl -fsI "http://127.0.0.1:8082/chunk_0.mp4" > /dev/null 2>&1 && break; sleep 1; done
+
+          N=$(python3 -c 'import os,json;print(len(json.loads(os.environ["MATRIX"])["include"]))')
+          : > videos.txt; : > audios.txt
+          for i in $(seq 0 $((N-1))); do
+            echo "file 'http://127.0.0.1:8082/chunk_$i.mp4'" >> videos.txt
+            echo "file 'http://127.0.0.1:8082/chunk_$i.wav'" >> audios.txt
+          done
+
+          WL="file,http,tcp,crypto,data"
+          if [ "$HAS_AUDIO" = "true" ]; then
+            ffmpeg -y -protocol_whitelist "$WL" -f concat -safe 0 -i videos.txt \
+                      -protocol_whitelist "$WL" -f concat -safe 0 -i audios.txt \
+                      -map 0:v -map 1:a -c:v copy -c:a aac -b:a 192k -shortest -movflags +faststart final.mp4
+          else
+            ffmpeg -y -protocol_whitelist "$WL" -f concat -safe 0 -i videos.txt \
+                      -map 0:v -c:v copy -movflags +faststart final.mp4
+          fi
+
+          ls -lh final.mp4
+          rclone copyto final.mp4 "$DEST/$OUT_NAME" --retries 5
+          LINK="$(rclone link "$DEST/$OUT_NAME" 2>/dev/null || true)"
+          {
+            echo "## Vidéo terminée"
+            echo "- Fichier : \`$DEST/$OUT_NAME\`"
+            [ -n "$LINK" ] && echo "- Lien : $LINK" || echo "- (ce stockage ne fournit pas de lien public : ouvre le fichier depuis ton stockage)"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          rclone purge "$TMP" || true

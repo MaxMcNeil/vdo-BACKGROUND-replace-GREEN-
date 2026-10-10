@@ -2,6 +2,7 @@ name: Replace Green Screen Background
 
 permissions:
   contents: write
+  actions: write
 
 on:
   # Lancement manuel : tu précises le tag de la Release qui contient la vidéo
@@ -21,6 +22,10 @@ on:
         description: 'Couleur du fond vert en hex (ex: 139D74). Laisser vide = mesure automatique'
         required: false
         default: ''
+      force_single:
+        description: "Mettre 'true' pour forcer le traitement normal même si la vidéo est longue"
+        required: false
+        default: 'false'
 
 jobs:
   replace-background:
@@ -54,7 +59,35 @@ jobs:
           test -f "input/video.mp4" || (echo "Vidéo introuvable — vérifie le tag/nom d'asset de la Release" && exit 1)
           test -f "input/${{ steps.files.outputs.bg }}" || (echo "Image de fond introuvable dans input/" && exit 1)
 
+      - name: Aiguillage (vidéo longue -> workflow dédié, découpage en parallèle)
+        id: route
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LONG_MINUTES: '15'
+          FORCE_SINGLE: ${{ github.event.inputs.force_single }}
+          RCLONE_DEST: ${{ vars.RCLONE_DEST }}
+          HAS_RCLONE: ${{ secrets.RCLONE_CONFIG != '' }}
+          KEY_COLOR: ${{ github.event.inputs.key_color }}
+        run: |
+          DUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "input/video.mp4")
+          echo "Durée de la vidéo : ${DUR}s (seuil vidéo longue : ${LONG_MINUTES} min)"
+          if [ "$FORCE_SINGLE" = "true" ]; then
+            echo "force_single=true : traitement normal."
+          elif python3 -c "import sys; sys.exit(0 if float('$DUR') > float('$LONG_MINUTES')*60 else 1)"; then
+            if [ -z "$RCLONE_DEST" ] || [ "$HAS_RCLONE" != "true" ]; then
+              echo "::warning::Vidéo longue détectée, mais le stockage externe n'est pas configuré (secret RCLONE_CONFIG + variable RCLONE_DEST) : traitement normal, avec risque de dépasser les limites de GitHub."
+            else
+            ARGS=(-f "release_tag=${{ github.event.inputs.release_tag }}" -f "video_asset=${{ github.event.inputs.video_asset }}" -f "background_file=${{ steps.files.outputs.bg }}" -f "dest=$RCLONE_DEST")
+            [ -n "$KEY_COLOR" ] && ARGS+=(-f "key_color=$KEY_COLOR")
+            gh workflow run replace-background-long.yml --repo "${{ github.repository }}" "${ARGS[@]}"
+            echo "long=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Vidéo longue : traitement lancé dans le workflow 'vidéos longues' (onglet Actions). Le résultat sera envoyé sur ton stockage externe."
+            fi
+          fi
+
       - name: Analyser le fond vert (couleur, tolérance, seuil)
+        if: steps.route.outputs.long != 'true'
         env:
           KEY_OVERRIDE: ${{ github.event.inputs.key_color }}
         run: |
@@ -107,6 +140,7 @@ jobs:
           python3 analyze.py
 
       - name: Générer la table de couleurs (dé-mélange du vert)
+        if: steps.route.outputs.long != 'true'
         run: |
           # Pour chaque couleur RGB possible : estime la part de fond vert dans le pixel,
           # reconstruit la vraie couleur du sujet (surtout utile sur les doigts flous),
@@ -139,6 +173,7 @@ jobs:
           test -s unmix.cube
 
       - name: Composer la vidéo (chromakey + masque propre + couleurs reconstruites)
+        if: steps.route.outputs.long != 'true'
         run: |
           mkdir -p output
           BG="input/${{ steps.files.outputs.bg }}"
@@ -163,6 +198,7 @@ jobs:
             output/result.mp4
 
       - name: Upload du résultat en artifact
+        if: steps.route.outputs.long != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: video-fond-remplace
@@ -170,6 +206,7 @@ jobs:
           retention-days: 14
 
       - name: Publier le résultat comme Release (gère les gros fichiers)
+        if: steps.route.outputs.long != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

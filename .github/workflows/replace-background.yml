@@ -59,7 +59,7 @@ jobs:
           N = 65
           K = (19.0, 157.0, 116.0)   # couleur du tissu vert (#139D74)
           EK = 87.0                  # excès de vert d'un pixel 100% tissu
-          THR = 115.0                # seuil de luminosité pour appliquer le dé-mélange
+          THR = 100.0                # seuil de luminosité pour appliquer le dé-mélange
           def f(r, g, b):
               a = 1 - max(g - (r + b) / 2, 0) / EK
               a = min(max(a, 0.4), 1.0)
@@ -90,7 +90,7 @@ jobs:
           FILTER="
             [1:v]scale=1920:1080,setsar=1[bg];
             [0:v]scale=1920:1080,setsar=1,split=2[a][c];
-            [a]format=yuva420p,chromakey=0x139D74:0.10:0.06,alphaextract,erosion,erosion,boxblur=1:1[mat];
+            [a]format=yuva420p,chromakey=0x139D74:0.10:0.06,alphaextract,erosion,erosion,erosion,boxblur=1:1[mat];
             [c]format=gbrp,lut3d=file=unmix.cube:interp=tetrahedral,format=rgba[cl];
             [cl][mat]alphamerge[fg];
             [bg][fg]overlay=shortest=1:format=auto[out]

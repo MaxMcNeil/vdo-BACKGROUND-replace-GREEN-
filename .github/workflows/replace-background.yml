@@ -1,5 +1,8 @@
 name: Replace Green Screen Background
 
+permissions:
+  contents: write
+
 on:
   # Se déclenche automatiquement quand tu changes l'image de fond dans input/
   push:
@@ -61,7 +64,7 @@ jobs:
             -filter_complex "\
               [1:v]scale=1920:1080,setsar=1[bg]; \
               [0:v]scale=1920:1080,setsar=1, \
-              chromakey=0x228C70:0.15:0.10, \
+              chromakey=0x139D74:0.08:0.08, \
               despill=type=green:mix=0.5:expand=0, \
               eq=saturation=1.05[fg]; \
               [bg][fg]overlay=shortest=1:format=auto[out]" \

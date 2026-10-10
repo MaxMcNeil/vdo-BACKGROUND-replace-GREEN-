@@ -4,10 +4,6 @@ permissions:
   contents: write
 
 on:
-  # Se déclenche automatiquement quand tu changes l'image de fond dans input/
-  push:
-    paths:
-      - 'input/**'
   # Lancement manuel : tu précises le tag de la Release qui contient la vidéo
   workflow_dispatch:
     inputs:
@@ -65,7 +61,7 @@ jobs:
               [1:v]scale=1920:1080,setsar=1[bg]; \
               [0:v]scale=1920:1080,setsar=1, \
               chromakey=0x139D74:0.08:0.08, \
-              despill=type=green:mix=0.5:expand=0, \
+              despill=type=green:mix=0.5:expand=0:blue=-0.8, \
               eq=saturation=1.05[fg]; \
               [bg][fg]overlay=shortest=1:format=auto[out]" \
             -map "[out]" -map 0:a? \

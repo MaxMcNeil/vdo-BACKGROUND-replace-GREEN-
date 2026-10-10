@@ -50,20 +50,33 @@ jobs:
           test -f "input/video.mp4" || (echo "Vidéo introuvable — vérifie le tag/nom d'asset de la Release" && exit 1)
           test -f "input/${{ steps.files.outputs.bg }}" || (echo "Image de fond introuvable dans input/" && exit 1)
 
-      - name: Composer la vidéo (chromakey + despill + anti-glitch)
+      - name: Composer la vidéo (chromakey + despill anti-liseré)
         run: |
           mkdir -p output
+          BG="input/${{ steps.files.outputs.bg }}"
+
+          # Masque : chromakey serré, puis érosion + léger flou (supprime le liseré des bords flous)
+          # Couleur : le vert est plafonné à la moyenne rouge/bleu et le bleu au rouge
+          #           (anti-halo vert/bleu pour un tissu vert-bleu, sans abîmer la peau)
+          FILTER='
+            [1:v]scale=1920:1080,setsar=1[bg];
+            [0:v]scale=1920:1080,setsar=1,split=2[a][c];
+            [a]format=yuva420p,chromakey=0x139D74:0.10:0.06,alphaextract,erosion,erosion,boxblur=1:1[mat];
+            [c]format=gbrp,extractplanes=r+g+b[r][g][b];
+            [r]split=3[r1][r2][r3];
+            [b]split=2[b1][b2];
+            [r1][b1]blend=all_mode=average[avg];
+            [g][avg]blend=all_mode=darken[g2];
+            [b2][r2]blend=all_mode=darken[b3];
+            [g2][b3][r3]mergeplanes=0x001020:gbrp,format=rgba[cl];
+            [cl][mat]alphamerge[fg];
+            [bg][fg]overlay=shortest=1:format=auto[out]
+          '
 
           ffmpeg -y \
             -i "input/video.mp4" \
-            -loop 1 -i "input/${{ steps.files.outputs.bg }}" \
-            -filter_complex "\
-              [1:v]scale=1920:1080,setsar=1[bg]; \
-              [0:v]scale=1920:1080,setsar=1, \
-              chromakey=0x139D74:0.08:0.08, \
-              despill=type=green:mix=0.5:expand=0:blue=-0.8, \
-              eq=saturation=1.05[fg]; \
-              [bg][fg]overlay=shortest=1:format=auto[out]" \
+            -loop 1 -i "$BG" \
+            -filter_complex "$FILTER" \
             -map "[out]" -map 0:a? \
             -c:v libx264 -preset slow -crf 17 -pix_fmt yuv420p \
             -c:a aac -b:a 192k \

@@ -30,6 +30,10 @@ on:
         description: 'Nom du fichier image de fond dans input/ (ex: background.jpg)'
         required: false
         default: 'background.jpg'
+      background_file_vertical:
+        description: 'Image de fond pour les vidéos VERTICALES, dans input/ (ex: background-vertical.jpg)'
+        required: false
+        default: 'background-vertical.jpg'
       key_color:
         description: 'Couleur du fond vert en hex (ex: 139D74). Laisser vide = mesure automatique'
         required: false
@@ -54,6 +58,9 @@ jobs:
       fps: ${{ steps.plan.outputs.fps }}
       has_audio: ${{ steps.plan.outputs.has_audio }}
       out_name: ${{ steps.plan.outputs.out_name }}
+      vertical: ${{ steps.orient.outputs.vertical }}
+      out_w: ${{ steps.orient.outputs.out_w }}
+      out_h: ${{ steps.orient.outputs.out_h }}
     steps:
       - name: Checkout du repo
         uses: actions/checkout@v4
@@ -100,7 +107,37 @@ jobs:
             echo "Renseigne 'source' (rclone) ou 'release_tag' + 'video_asset'."; exit 1
           fi
           echo "SRC=$SRC" >> "$GITHUB_ENV"
-          test -f "input/${{ github.event.inputs.background_file || 'background.jpg' }}" || { echo "Image de fond introuvable dans input/"; exit 1; }
+
+      - name: Détecter l'orientation de la vidéo (horizontale / verticale)
+        id: orient
+        env:
+          VIDEO_PATH: ${{ env.SRC }}
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess
+          src = os.environ["VIDEO_PATH"]
+          j = json.loads(subprocess.check_output(["ffprobe", "-v", "error", "-select_streams", "v:0",
+              "-show_entries", "stream=width,height:stream_side_data=rotation", "-of", "json", src]))
+          s = j["streams"][0]
+          w, h = int(s["width"]), int(s["height"])
+          rot = 0
+          for sd in s.get("side_data_list", []):
+              if "rotation" in sd:
+                  rot = int(round(float(sd["rotation"])))
+          if abs(rot) % 180 == 90:      # vidéo tournée par métadonnée (téléphone) : on inverse
+              w, h = h, w
+          vertical = h > w
+          k = min(1.0, 1920.0 / max(w, h))
+          ow, oh = int(round(w * k / 2.0)) * 2, int(round(h * k / 2.0)) * 2
+          print("Vidéo %dx%d -> %s, sortie %dx%d" % (w, h, "VERTICALE" if vertical else "horizontale", ow, oh))
+          with open(os.environ["GITHUB_OUTPUT"], "a") as o:
+              o.write("vertical=%s\nout_w=%d\nout_h=%d\n" % ("true" if vertical else "false", ow, oh))
+          PY
+          if [ "$(grep '^vertical=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2)" = "true" ]; then
+            test -f "input/${{ github.event.inputs.background_file_vertical || 'background-vertical.jpg' }}" || { echo "Image de fond verticale introuvable dans input/"; exit 1; }
+          else
+            test -f "input/${{ github.event.inputs.background_file || 'background.jpg' }}" || { echo "Image de fond introuvable dans input/"; exit 1; }
+          fi
 
       - name: Analyser la vidéo (couleur du fond, tolérance, seuil, découpage)
         id: plan
@@ -271,6 +308,7 @@ jobs:
           test -s unmix.cube
 
       - name: Composer le morceau (mêmes filtres que le workflow principal)
+        if: needs.prepare.outputs.vertical != 'true'
         env:
           IDX: ${{ matrix.idx }}
           SS: ${{ matrix.ss }}
@@ -284,6 +322,43 @@ jobs:
           FILTER="
             [1:v]scale=1920:1080,setsar=1[bg];
             [0:v]scale=1920:1080,setsar=1,split=2[a][c];
+            [a]format=yuva420p,chromakey=0x$KEY_HEX:$KEY_SIM:0.06,alphaextract,erosion,erosion,erosion,boxblur=1:1[mat];
+            [c]format=gbrp,lut3d=file=unmix.cube:interp=tetrahedral,format=rgba[cl];
+            [cl][mat]alphamerge[fg];
+            [bg][fg]overlay=shortest=1:format=auto[out]
+          "
+
+          # Audio du morceau en WAV sans perte (recollé sans coupure puis encodé une seule fois)
+          AUDIO_OUT=()
+          if [ "$HAS_AUDIO" = "true" ]; then
+            AUDIO_OUT=(-map 0:a:0 -c:a pcm_s16le -t "$LEN" "output/chunk_$IDX.wav")
+          fi
+
+          ffmpeg -y \
+            -ss "$SS" -t "$LEN" -i "$SRC" \
+            -loop 1 -i "$BG" \
+            -filter_complex "$FILTER" \
+            -map "[out]" \
+            -c:v libx264 -preset slow -crf 17 -pix_fmt yuv420p -r "$FPS" -fps_mode cfr \
+            "output/chunk_$IDX.mp4" \
+            "${AUDIO_OUT[@]}"
+
+      - name: Composer le morceau VERTICAL (même traitement, format portrait)
+        if: needs.prepare.outputs.vertical == 'true'
+        env:
+          IDX: ${{ matrix.idx }}
+          SS: ${{ matrix.ss }}
+          LEN: ${{ matrix.len }}
+          FPS: ${{ needs.prepare.outputs.fps }}
+          HAS_AUDIO: ${{ needs.prepare.outputs.has_audio }}
+        run: |
+          mkdir -p output
+          BG="input/${{ github.event.inputs.background_file_vertical || 'background-vertical.jpg' }}"
+          OW=${{ needs.prepare.outputs.out_w }}; OH=${{ needs.prepare.outputs.out_h }}
+
+          FILTER="
+            [1:v]scale=$OW:$OH:force_original_aspect_ratio=increase,crop=$OW:$OH,setsar=1[bg];
+            [0:v]scale=$OW:$OH,setsar=1,split=2[a][c];
             [a]format=yuva420p,chromakey=0x$KEY_HEX:$KEY_SIM:0.06,alphaextract,erosion,erosion,erosion,boxblur=1:1[mat];
             [c]format=gbrp,lut3d=file=unmix.cube:interp=tetrahedral,format=rgba[cl];
             [cl][mat]alphamerge[fg];

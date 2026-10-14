@@ -2,55 +2,120 @@
 
 Remplace automatiquement un fond vert (chroma key) par une image de fond, via GitHub Actions + FFmpeg.
 
-Les fichiers vidéo (volumineux) passent par les **Releases GitHub** (jusqu'à 2 Go/fichier), pas par des commits Git classiques (limités à 100 Mo).
+- Vidéos **horizontales et verticales** (détection automatique, fond dédié à chaque orientation)
+- **Mesure automatique** de la couleur du tissu vert : plus de réglage à la main
+- **Vidéos longues** : découpage en morceaux traités en parallèle, résultat envoyé sur ton stockage externe
 
-## Comment ça marche
+Les vidéos (volumineuses) passent par les **Releases GitHub** (jusqu'à environ 2 Go par fichier), pas par des commits Git classiques (limités à 100 Mo).
 
-### 1. Uploader ta vidéo en Release
+## Fichiers du dépôt
+
+| Fichier | Rôle |
+|---|---|
+| `.github/workflows/replace-background.yml` | Workflow principal (vidéos courtes, et aiguillage automatique) |
+| `.github/workflows/replace-background-long.yml` | Workflow des vidéos longues (lancé automatiquement, ou à la main) |
+| `input/background.jpg` | Image de fond pour les vidéos **horizontales** |
+| `input/background-vertical.jpg` | Image de fond pour les vidéos **verticales** |
+
+Garde **les deux images** dans `input/`, même si tu ne filmes qu'en horizontal : le workflow principal vérifie la présence du fond horizontal au démarrage.
+
+## Utilisation (vidéo courte, 15 min ou moins)
+
+### 1. Mettre la vidéo en Release
 
 Sur GitHub : onglet **Releases** → **Draft a new release**
 - Choisis un tag (ex: `v1`)
-- Attache ta vidéo (`video.mp4`) comme asset
+- Attache ta vidéo (ex: `video.mp4`) comme asset
 - Publie la release
 
-### 2. Ajouter l'image de fond
+### 2. Lancer le traitement
 
-Dépose ton image dans `input/background.jpg` (les images restent légères, donc en Git normal), et push.
+Onglet **Actions** → **Replace Green Screen Background** → **Run workflow**, puis :
 
-### 3. Lancer le traitement
+| Champ | Rôle |
+|---|---|
+| `release_tag` | Tag de la release qui contient la vidéo (ex: `v1`) |
+| `video_asset` | Nom exact du fichier attaché à cette release (ex: `video.mp4`) |
+| `background_file` | Fond horizontal dans `input/` (défaut : `background.jpg`) |
+| `background_file_vertical` | Fond vertical dans `input/` (défaut : `background-vertical.jpg`) |
+| `key_color` | Optionnel : couleur du fond vert en hex (ex: `139D74`). Vide = mesure automatique |
+| `force_single` | Optionnel : `true` pour forcer le traitement normal même si la vidéo est longue |
 
-Onglet **Actions** → workflow **Replace Green Screen Background** → **Run workflow**, puis renseigne :
-- `release_tag` : le tag de la release contenant la vidéo (ex: `v1`)
-- `video_asset` : le nom exact du fichier vidéo attaché à cette release (ex: `video.mp4`)
-- `background_file` : nom du fichier dans `input/` (par défaut `background.jpg`)
+### 3. Récupérer le résultat
 
-### 4. Récupérer le résultat
+Le workflow publie une **nouvelle Release** nommée `result-<numéro de run>` contenant `result.mp4`. Le fichier est aussi disponible en artifact pendant 14 jours (onglet Actions → le run → Artifacts).
 
-Le workflow télécharge la vidéo depuis la Release, la traite avec FFmpeg, puis publie automatiquement une **nouvelle Release** nommée `result-<numéro de run>` contenant `result.mp4`. Le fichier est aussi disponible en artifact pendant 14 jours (onglet Actions > le run > Artifacts).
+## Horizontal ou vertical
 
-## Réglage chromakey — calibré pour ton tissu vert
+Le workflow lit les dimensions de la vidéo (rotation des téléphones comprise) :
+- **Horizontale** : sortie 1920×1080 avec `background.jpg`
+- **Verticale** : sortie à la taille de la vidéo (ex: 1080×1920) avec `background-vertical.jpg`. L'image est recadrée au centre pour remplir l'écran, sans étirement : utilise une image de fond **au format portrait** pour un bon résultat.
 
-```
-chromakey=0x228C70:0.15:0.10
-```
+## Réglages automatiques
 
-Cette couleur (`#228C70`) a été mesurée directement sur une photo de ton tissu vert — ce n'est pas un vert "studio" classique (plus clair/saturé comme `#00FF00`), donc ne reviens pas à une valeur générique trouvée en ligne.
+Avant le traitement, le workflow mesure ton fond vert :
+1. Il prend 12 images réparties dans la vidéo.
+2. Il mesure la couleur médiane du fond sur les **bords** (bandeau du haut et côtés dans la partie haute de l'image), en ignorant ce qui n'est pas vert (mains, objets).
+3. Il en déduit la couleur de clé, la tolérance du chromakey et le seuil de reconstruction des couleurs.
 
-- `0x228C70` = couleur exacte du tissu, à remesurer si l'éclairage change notablement au tournage
-- `0.15` = **similarity** (tolérance sur la couleur). Trop bas → il reste du vert. Trop haut → ça mange dans le sujet.
-- `0.10` = **blend** (douceur du dégradé sur les bords). Augmente légèrement (`0.12`-`0.15`) si les contours sont trop durs/dentelés.
+Pour que ça marche bien :
+- Le tissu vert doit couvrir le haut et les côtés du cadre, **sans que tu touches les bords** pendant la vidéo.
+- Pas d'ombres fortes sur le fond.
+- Si la mesure n'est pas fiable (le workflow s'arrête avec le message « Mesure du fond vert peu fiable »), relance avec `key_color` renseigné.
 
-Le paramètre `despill=mix=0.5` retire la teinte verte résiduelle qui "baverait" sur les cheveux/épaules après le chromakey.
+Le traitement lui-même (chromakey serré, masque érodé et adouci, reconstruction de la couleur des bords flous, comme les doigts en mouvement) est identique pour les vidéos courtes et longues.
 
-**Astuce fiabilité :** la couleur perçue dépend de l'éclairage réel au tournage. Si le premier résultat garde des traces de vert ou mange trop dans le sujet, extrais une frame de ta vraie vidéo (`ffmpeg -i video.mp4 -frames:v 1 frame.png`) et remesure la couleur dominante du fond dessus plutôt que de garder cette valeur telle quelle.
+## Vidéos longues (plus de 15 minutes)
 
-## Conseils tournage (déjà bien partis avec 2m de distance)
+Si la vidéo dépasse **15 minutes**, le workflow principal lance automatiquement **Replace Green Screen Background (vidéos longues)** :
+1. La couleur du fond est mesurée une seule fois pour toute la vidéo.
+2. La vidéo est découpée en morceaux de 10 minutes (`chunk_minutes`), traités **en parallèle**.
+3. Les morceaux sont recollés avec le son, puis envoyés sur ton stockage externe.
+4. Un seul fichier est produit ; le lien (si ton stockage en fournit un) est affiché dans le résumé du run.
 
-- Éclaire le fond vert **séparément** du sujet, pour un vert bien uniforme sans ombre portée
+### Configuration du stockage externe (une seule fois)
+
+1. Sur un ordinateur, installe [rclone](https://rclone.org/downloads/) et lance `rclone config` pour créer un stockage (Google Drive, Dropbox, etc.). Le fichier `rclone.conf` est alors créé (`rclone config file` donne son emplacement).
+2. Sur GitHub : **Settings** → **Secrets and variables** → **Actions**
+   - Onglet **Secrets** → **New repository secret** : nom `RCLONE_CONFIG`, valeur = le contenu complet de `rclone.conf`
+   - Onglet **Variables** → **New repository variable** : nom `RCLONE_DEST`, valeur = dossier de destination (ex: `gdrive:resultats`)
+
+Ne partage jamais le contenu de `rclone.conf` : il donne accès à ton stockage.
+
+Sans cette configuration, une vidéo longue est traitée normalement par le workflow principal, avec un avertissement : le résultat risque de dépasser les limites de GitHub (voir plus bas).
+
+### Lancer à la main (vidéos de plus de 2 Go)
+
+Une vidéo de plus de 2 Go ne peut pas passer par une Release. Dépose-la sur ton stockage, puis lance **Replace Green Screen Background (vidéos longues)** avec :
+
+| Champ | Rôle |
+|---|---|
+| `source` | Chemin rclone de la vidéo (ex: `gdrive:videos/long.mp4`) |
+| `dest` | Dossier de destination (vide = variable `RCLONE_DEST`) |
+| `background_file` / `background_file_vertical` | Fonds, comme ci-dessus |
+| `key_color` | Optionnel, comme ci-dessus |
+| `chunk_minutes` | Durée de chaque morceau (défaut : 10) |
+
+Si la vidéo est dans une Release, renseigne `release_tag` et `video_asset` à la place de `source`.
+
+## Dépannage
+
+| Message | Que faire |
+|---|---|
+| `Mesure du fond vert peu fiable` | Relance avec `key_color` (ex: `139D74`), couleur mesurée sur une image de ta vidéo |
+| `Image de fond verticale introuvable` | Vérifie `input/background-vertical.jpg` (ou le nom donné dans `background_file_vertical`) |
+| `Secret RCLONE_CONFIG manquant` | Configure le stockage externe (voir plus haut) |
+| Vidéo longue traitée normalement avec un avertissement | Le stockage externe n'est pas configuré : voir plus haut |
+
+## Conseils tournage
+
+- Éclaire le fond vert **séparément** du sujet, pour un vert uniforme sans ombre portée
 - Évite les vêtements verts ou brillants (reflets)
-- Shutter speed rapide si possible (réduit le flou de mouvement sur les bords, source n°1 des glitchs)
+- Vitesse d'obturation rapide si possible : elle réduit le flou de mouvement sur les bords, source n°1 des défauts autour des doigts
+- Garde les bords du cadre libres : c'est là que la couleur du fond est mesurée
 
 ## Limites GitHub Actions (runners gratuits)
 
-- Pas de GPU : traitement CPU uniquement, compter environ 1,5x à 2x la durée de la vidéo en temps de traitement
-- Releases : jusqu'à 2 Go par asset, largement suffisant pour la plupart des vidéos courtes/moyennes
+- Pas de GPU : traitement CPU uniquement. Le temps de traitement dépend du runner, compte plusieurs fois la durée de la vidéo pour une vidéo courte, d'où le découpage en parallèle pour les longues.
+- Un job GitHub est limité à **6 heures** : c'est pourquoi les vidéos longues sont découpées en morceaux.
+- Releases : environ 2 Go par fichier. Un résultat plus gros doit aller sur ton stockage externe.

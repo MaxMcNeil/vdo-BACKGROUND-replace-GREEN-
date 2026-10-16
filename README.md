@@ -4,6 +4,7 @@ Remplace automatiquement un fond vert (chroma key) par une image de fond, via Gi
 
 - Vidéos **horizontales et verticales** (détection automatique, fond dédié à chaque orientation)
 - **Mesure automatique** de la couleur du tissu vert : plus de réglage à la main
+- Cadence d'images d'origine conservée (30 i/s reste 30 i/s), vidéos **HDR** converties automatiquement en SDR
 - **Vidéos longues** : découpage en morceaux traités en parallèle, résultat envoyé sur ton stockage externe
 
 Les vidéos (volumineuses) passent par les **Releases GitHub** (jusqu'à environ 2 Go par fichier), pas par des commits Git classiques (limités à 100 Mo).
@@ -48,8 +49,16 @@ Le workflow publie une **nouvelle Release** nommée `result-<numéro de run>` co
 ## Horizontal ou vertical
 
 Le workflow lit les dimensions de la vidéo (rotation des téléphones comprise) :
-- **Horizontale** : sortie 1920×1080 avec `background.jpg`
-- **Verticale** : sortie à la taille de la vidéo (ex: 1080×1920) avec `background-vertical.jpg`. L'image est recadrée au centre pour remplir l'écran, sans étirement : utilise une image de fond **au format portrait** pour un bon résultat.
+- **Horizontale 16:9** : sortie 1920×1080 avec `background.jpg`
+- **Autre format horizontal ou carré** (4:3, 1:1, etc.) : la sortie garde les proportions de la vidéo (ex: 1440×1080), avec `background.jpg`. Plus d'étirement.
+- **Verticale** : sortie à la taille de la vidéo (ex: 1080×1920) avec `background-vertical.jpg`.
+
+Dans tous les cas, l'image de fond est **recadrée au centre** pour remplir l'écran, sans jamais l'étirer : pour la verticale, utilise une image de fond **au format portrait**.
+
+## Cadence et HDR
+
+- **Cadence d'images** : le résultat garde celle de la vidéo d'origine (24, 25, 30, 50, 60 i/s, ou les variantes 29,97 / 23,976). Une cadence variable (téléphone) est ramenée à une cadence constante.
+- **HDR** (HLG ou HDR10, par exemple filmé avec « HDR vidéo » activé) : le workflow le détecte et convertit la vidéo en SDR avant le traitement. Sans cette conversion, la couleur du fond serait mal mesurée et le sujet pourrait disparaître. La conversion a été testée sur une vidéo HLG simulée, pas sur un vrai fichier de téléphone : si le rendu d'une vraie vidéo HDR ne te convient pas, filme en SDR.
 
 ## Réglages automatiques
 
@@ -90,13 +99,17 @@ Une vidéo de plus de 2 Go ne peut pas passer par une Release. Dépose-la sur to
 
 | Champ | Rôle |
 |---|---|
-| `source` | Chemin rclone de la vidéo (ex: `gdrive:videos/long.mp4`) |
+| `source` | Chemin rclone de la vidéo, de la forme `nom_du_stockage:dossier/fichier.mp4` (ex: `gdrive:videos/long.mp4`, ou `gdrive:long.mp4` si le fichier est à la racine du Drive) |
 | `dest` | Dossier de destination (vide = variable `RCLONE_DEST`) |
 | `background_file` / `background_file_vertical` | Fonds, comme ci-dessus |
 | `key_color` | Optionnel, comme ci-dessus |
 | `chunk_minutes` | Durée de chaque morceau (défaut : 10) |
 
 Si la vidéo est dans une Release, renseigne `release_tag` et `video_asset` à la place de `source`.
+
+### Google Drive : créer ton propre client_id
+
+Avec le `client_id` partagé de rclone, rclone affiche l'avertissement « This remote uses rclone's shared Google Drive client_id, which is being retired and will stop working during 2026 ». Pour éviter une coupure, crée ton propre client_id en suivant https://rclone.org/drive/#making-your-own-client-id, puis refais `rclone config` et remplace le secret `RCLONE_CONFIG`.
 
 ## Dépannage
 
@@ -106,6 +119,11 @@ Si la vidéo est dans une Release, renseigne `release_tag` et `video_asset` à l
 | `Image de fond verticale introuvable` | Vérifie `input/background-vertical.jpg` (ou le nom donné dans `background_file_vertical`) |
 | `Secret RCLONE_CONFIG manquant` | Configure le stockage externe (voir plus haut) |
 | Vidéo longue traitée normalement avec un avertissement | Le stockage externe n'est pas configuré : voir plus haut |
+| `Fichier introuvable via rclone` | Le log liste ce que rclone voit dans le dossier : corrige le chemin (dossiers, majuscules, extension). Un fichier « Partagé avec moi » n'est pas visible |
+| `Serveur rclone : réponse HTTP ...` | rclone voit le fichier mais ne peut pas le lire : vérifie les droits du stockage et le `client_id` (voir plus haut) |
+| `Morceau N introuvable sur le stockage` | Un morceau a échoué : dans le run, **Re-run failed jobs** |
+| `Espace disque insuffisant pour assembler` | La vidéo est trop longue pour un runner GitHub (environ 5 h maximum) : réduis la durée |
+| `Impossible de lire des images de la vidéo` | Le fichier est corrompu ou sa durée est incohérente : ré-exporte la vidéo |
 
 ## Conseils tournage
 
@@ -118,4 +136,5 @@ Si la vidéo est dans une Release, renseigne `release_tag` et `video_asset` à l
 
 - Pas de GPU : traitement CPU uniquement. Le temps de traitement dépend du runner, compte plusieurs fois la durée de la vidéo pour une vidéo courte, d'où le découpage en parallèle pour les longues.
 - Un job GitHub est limité à **6 heures** : c'est pourquoi les vidéos longues sont découpées en morceaux.
-- Releases : environ 2 Go par fichier. Un résultat plus gros doit aller sur ton stockage externe.
+- Releases : environ 2 Go par fichier. Un résultat plus gros doit aller sur ton stockage externe. Si la publication de la Release échoue, le résultat reste disponible en artifact pendant 14 jours.
+- Un résultat porte le nom de la source (`nom_fond-remplace.mp4`) : retraiter la même source écrase l'ancien résultat sur ton stockage.

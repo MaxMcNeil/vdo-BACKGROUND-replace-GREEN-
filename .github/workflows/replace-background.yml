@@ -43,25 +43,28 @@ jobs:
 
       - name: Préparer les noms de fichiers
         id: files
+        env:
+          BGFILE: ${{ github.event.inputs.background_file }}
         run: |
-          BG="${{ github.event.inputs.background_file || 'background.jpg' }}"
+          BG="${BGFILE:-background.jpg}"
           echo "bg=$BG" >> "$GITHUB_OUTPUT"
 
       - name: Télécharger la vidéo depuis la Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RTAG: ${{ github.event.inputs.release_tag }}
+          RASSET: ${{ github.event.inputs.video_asset }}
         run: |
           mkdir -p input
-          gh release download "${{ github.event.inputs.release_tag }}" \
+          gh release download "$RTAG" \
             --repo "${{ github.repository }}" \
-            --pattern "${{ github.event.inputs.video_asset }}" \
+            --pattern "$RASSET" \
             --output "input/video.mp4" \
             --clobber
 
       - name: Vérifier que les fichiers existent
         run: |
           test -f "input/video.mp4" || (echo "Vidéo introuvable — vérifie le tag/nom d'asset de la Release" && exit 1)
-          test -f "input/${{ steps.files.outputs.bg }}" || (echo "Image de fond introuvable dans input/" && exit 1)
 
       - name: Aiguillage (vidéo longue -> workflow dédié, découpage en parallèle)
         id: route
@@ -73,20 +76,27 @@ jobs:
           RCLONE_DEST: ${{ vars.RCLONE_DEST }}
           HAS_RCLONE: ${{ secrets.RCLONE_CONFIG != '' }}
           KEY_COLOR: ${{ github.event.inputs.key_color }}
+          RTAG: ${{ github.event.inputs.release_tag }}
+          RASSET: ${{ github.event.inputs.video_asset }}
+          BGH: ${{ steps.files.outputs.bg }}
+          BGV: ${{ github.event.inputs.background_file_vertical }}
         run: |
           DUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "input/video.mp4")
           echo "Durée de la vidéo : ${DUR}s (seuil vidéo longue : ${LONG_MINUTES} min)"
           if [ "$FORCE_SINGLE" = "true" ]; then
             echo "force_single=true : traitement normal."
-          elif python3 -c "import sys; sys.exit(0 if float('$DUR') > float('$LONG_MINUTES')*60 else 1)"; then
+          elif python3 -c "import sys; sys.exit(0 if float('$DUR') > float('$LONG_MINUTES')*60 else 1)" 2>/dev/null; then
             if [ -z "$RCLONE_DEST" ] || [ "$HAS_RCLONE" != "true" ]; then
               echo "::warning::Vidéo longue détectée, mais le stockage externe n'est pas configuré (secret RCLONE_CONFIG + variable RCLONE_DEST) : traitement normal, avec risque de dépasser les limites de GitHub."
             else
-            ARGS=(-f "release_tag=${{ github.event.inputs.release_tag }}" -f "video_asset=${{ github.event.inputs.video_asset }}" -f "background_file=${{ steps.files.outputs.bg }}" -f "background_file_vertical=${{ github.event.inputs.background_file_vertical || 'background-vertical.jpg' }}" -f "dest=$RCLONE_DEST")
+            ARGS=(-f "release_tag=$RTAG" -f "video_asset=$RASSET" -f "background_file=$BGH" -f "background_file_vertical=${BGV:-background-vertical.jpg}" -f "dest=$RCLONE_DEST")
             [ -n "$KEY_COLOR" ] && ARGS+=(-f "key_color=$KEY_COLOR")
-            gh workflow run replace-background-long.yml --repo "${{ github.repository }}" "${ARGS[@]}"
-            echo "long=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::Vidéo longue : traitement lancé dans le workflow 'vidéos longues' (onglet Actions). Le résultat sera envoyé sur ton stockage externe."
+            if gh workflow run replace-background-long.yml --repo "${{ github.repository }}" "${ARGS[@]}"; then
+              echo "long=true" >> "$GITHUB_OUTPUT"
+              echo "::notice::Vidéo longue : traitement lancé dans le workflow 'vidéos longues' (onglet Actions). Le résultat sera envoyé sur ton stockage externe."
+            else
+              echo "::warning::Impossible de lancer le workflow des vidéos longues (droits ou réseau) : traitement normal, avec risque de dépasser les limites de GitHub."
+            fi
             fi
           fi
 
@@ -99,9 +109,10 @@ jobs:
         run: |
           python3 - <<'PY'
           import json, os, subprocess
-          src = os.environ["VIDEO_PATH"]
+          src = os.environ.get("VIDEO_PATH") or os.environ["SRC"]
           j = json.loads(subprocess.check_output(["ffprobe", "-v", "error", "-select_streams", "v:0",
-              "-show_entries", "stream=width,height:stream_side_data=rotation", "-of", "json", src]))
+              "-show_entries", "stream=width,height,color_transfer,avg_frame_rate,r_frame_rate:stream_side_data=rotation",
+              "-of", "json", src]))
           s = j["streams"][0]
           w, h = int(s["width"]), int(s["height"])
           rot = 0
@@ -111,24 +122,45 @@ jobs:
           if abs(rot) % 180 == 90:      # vidéo tournée par métadonnée (téléphone) : on inverse
               w, h = h, w
           vertical = h > w
-          k = min(1.0, 1920.0 / max(w, h))
-          ow, oh = int(round(w * k / 2.0)) * 2, int(round(h * k / 2.0)) * 2
-          print("Vidéo %dx%d -> %s, sortie %dx%d" % (w, h, "VERTICALE" if vertical else "horizontale", ow, oh))
+          if not vertical and abs(w / float(h) - 16 / 9.0) < 0.012:
+              ow, oh = 1920, 1080       # 16:9 : sortie standard, comme avant
+          else:
+              k = min(1.0, 1920.0 / max(w, h))
+              ow, oh = int(round(w * k / 2.0)) * 2, int(round(h * k / 2.0)) * 2
+          hdr = s.get("color_transfer") in ("smpte2084", "arib-std-b67")
+
+          def to_rate(t):
+              try:
+                  a, b = [float(x) for x in t.split("/")] if "/" in t else (float(t), 1.0)
+                  return a / b if b else 0.0
+              except Exception:
+                  return 0.0
+          rate = to_rate(s.get("avg_frame_rate", ""))
+          if not 5.0 <= rate <= 120.0:
+              alt = to_rate(s.get("r_frame_rate", ""))
+              rate = alt if 5.0 <= alt <= 120.0 else 30.0
+          std = {"24000/1001": 23.976, "24": 24.0, "25": 25.0, "30000/1001": 29.97, "30": 30.0, "50": 50.0, "60000/1001": 59.94, "60": 60.0}
+          best = min(std.items(), key=lambda kv: abs(kv[1] - rate))
+          fps = best[0] if abs(best[1] - rate) / rate < 0.01 else "%.3f" % rate
+
+          print("Vidéo %dx%d -> %s, sortie %dx%d, %s i/s%s" % (w, h, "VERTICALE" if vertical else "horizontale", ow, oh, fps, ", HDR (conversion SDR)" if hdr else ""))
           with open(os.environ["GITHUB_OUTPUT"], "a") as o:
-              o.write("vertical=%s\nout_w=%d\nout_h=%d\n" % ("true" if vertical else "false", ow, oh))
+              o.write("vertical=%s\nout_w=%d\nout_h=%d\nhdr=%s\nfps=%s\n" % ("true" if vertical else "false", ow, oh, "true" if hdr else "false", fps))
           PY
 
       - name: Analyser le fond vert (couleur, tolérance, seuil)
         if: steps.route.outputs.long != 'true'
         env:
           KEY_OVERRIDE: ${{ github.event.inputs.key_color }}
+          HDR: ${{ steps.orient.outputs.hdr }}
         run: |
           cat > analyze.py <<'PY'
           import os, math, subprocess, statistics as st
           VIDEO = "input/video.mp4"
           W, H, N = 192, 108, 12
+          TM = "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=mobius:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p," if os.environ.get("HDR") == "true" else ""
           dur = float(subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", VIDEO]).decode().strip())
-          raw = subprocess.check_output(["ffmpeg", "-v", "error", "-i", VIDEO, "-vf", "fps=%.4f,scale=%d:%d:flags=area,format=rgb24" % (N / dur, W, H), "-frames:v", str(N), "-f", "rawvideo", "-"])
+          raw = subprocess.check_output(["ffmpeg", "-v", "error", "-i", VIDEO, "-vf", "fps=%.4f," % (N / dur) + TM + "scale=%d:%d:flags=area,format=rgb24" % (W, H), "-frames:v", str(N), "-f", "rawvideo", "-"])
           fs = W * H * 3
           frames = [raw[i * fs:(i + 1) * fs] for i in range(len(raw) // fs)]
 
@@ -206,14 +238,24 @@ jobs:
 
       - name: Composer la vidéo (chromakey + masque propre + couleurs reconstruites)
         if: steps.route.outputs.long != 'true' && steps.orient.outputs.vertical != 'true'
+        env:
+          BGH: ${{ steps.files.outputs.bg }}
+          OWV: ${{ steps.orient.outputs.out_w }}
+          OHV: ${{ steps.orient.outputs.out_h }}
+          FPSV: ${{ steps.orient.outputs.fps }}
+          HDR: ${{ steps.orient.outputs.hdr }}
         run: |
           mkdir -p output
-          BG="input/${{ steps.files.outputs.bg }}"
+          BG="input/$BGH"
+          test -f "$BG" || { echo "Image de fond introuvable dans input/ : $BGH"; exit 1; }
+          OW=${OWV:-1920}; OH=${OHV:-1080}; FPS=${FPSV:-30}
+          TM=""; [ "$HDR" = "true" ] && TM="zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=mobius:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,"
 
           # Masque : chromakey serré + érosion + léger flou. Couleur : table unmix.cube.
+          # (HDR : conversion SDR avant traitement ; fond recadré au centre, jamais étiré)
           FILTER="
-            [1:v]scale=1920:1080,setsar=1[bg];
-            [0:v]scale=1920:1080,setsar=1,split=2[a][c];
+            [1:v]scale=$OW:$OH:force_original_aspect_ratio=increase,crop=$OW:$OH,setsar=1[bg];
+            [0:v]${TM}scale=$OW:$OH,setsar=1,split=2[a][c];
             [a]format=yuva420p,chromakey=0x$KEY_HEX:$KEY_SIM:0.06,alphaextract,erosion,erosion,erosion,boxblur=1:1[mat];
             [c]format=gbrp,lut3d=file=unmix.cube:interp=tetrahedral,format=rgba[cl];
             [cl][mat]alphamerge[fg];
@@ -222,7 +264,7 @@ jobs:
 
           ffmpeg -y \
             -i "input/video.mp4" \
-            -loop 1 -i "$BG" \
+            -framerate "$FPS" -loop 1 -i "$BG" \
             -filter_complex "$FILTER" \
             -map "[out]" -map 0:a? \
             -c:v libx264 -preset slow -crf 17 -pix_fmt yuv420p \
@@ -231,16 +273,24 @@ jobs:
 
       - name: Composer la vidéo VERTICALE (même traitement, format portrait)
         if: steps.route.outputs.long != 'true' && steps.orient.outputs.vertical == 'true'
+        env:
+          BGV: ${{ github.event.inputs.background_file_vertical }}
+          OWV: ${{ steps.orient.outputs.out_w }}
+          OHV: ${{ steps.orient.outputs.out_h }}
+          FPSV: ${{ steps.orient.outputs.fps }}
+          HDR: ${{ steps.orient.outputs.hdr }}
         run: |
           mkdir -p output
-          BG="input/${{ github.event.inputs.background_file_vertical || 'background-vertical.jpg' }}"
+          BG="input/${BGV:-background-vertical.jpg}"
           test -f "$BG" || { echo "Image de fond verticale introuvable : $BG"; exit 1; }
-          OW=${{ steps.orient.outputs.out_w }}; OH=${{ steps.orient.outputs.out_h }}
+          OW=${OWV:-1080}; OH=${OHV:-1920}; FPS=${FPSV:-30}
+          TM=""; [ "$HDR" = "true" ] && TM="zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=mobius:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,"
 
           # Masque : chromakey serré + érosion + léger flou. Couleur : table unmix.cube.
+          # (HDR : conversion SDR avant traitement ; fond recadré au centre, jamais étiré)
           FILTER="
             [1:v]scale=$OW:$OH:force_original_aspect_ratio=increase,crop=$OW:$OH,setsar=1[bg];
-            [0:v]scale=$OW:$OH,setsar=1,split=2[a][c];
+            [0:v]${TM}scale=$OW:$OH,setsar=1,split=2[a][c];
             [a]format=yuva420p,chromakey=0x$KEY_HEX:$KEY_SIM:0.06,alphaextract,erosion,erosion,erosion,boxblur=1:1[mat];
             [c]format=gbrp,lut3d=file=unmix.cube:interp=tetrahedral,format=rgba[cl];
             [cl][mat]alphamerge[fg];
@@ -249,7 +299,7 @@ jobs:
 
           ffmpeg -y \
             -i "input/video.mp4" \
-            -loop 1 -i "$BG" \
+            -framerate "$FPS" -loop 1 -i "$BG" \
             -filter_complex "$FILTER" \
             -map "[out]" -map 0:a? \
             -c:v libx264 -preset slow -crf 17 -pix_fmt yuv420p \
@@ -274,4 +324,4 @@ jobs:
             --repo "${{ github.repository }}" \
             --title "Résultat run #${{ github.run_number }}" \
             --notes "Vidéo fond remplacé, générée automatiquement." \
-            "output/result.mp4"
+            "output/result.mp4" || gh release upload "$TAG" "output/result.mp4" --repo "${{ github.repository }}" --clobber

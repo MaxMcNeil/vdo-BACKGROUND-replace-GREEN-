@@ -60,6 +60,7 @@ jobs:
       out_name: ${{ steps.plan.outputs.out_name }}
       vertical: ${{ steps.orient.outputs.vertical }}
       out_w: ${{ steps.orient.outputs.out_w }}
+      hdr: ${{ steps.orient.outputs.hdr }}
       out_h: ${{ steps.orient.outputs.out_h }}
     steps:
       - name: Checkout du repo
@@ -68,7 +69,7 @@ jobs:
       - name: Installer FFmpeg et rclone
         run: |
           sudo apt-get update && sudo apt-get install -y ffmpeg
-          curl -fsSL https://rclone.org/install.sh | sudo bash
+          (curl -fsSL https://rclone.org/install.sh | sudo bash) || sudo apt-get install -y rclone
 
       - name: Configurer rclone
         env:
@@ -91,13 +92,29 @@ jobs:
         run: |
           mkdir -p input
           if [ -n "$SOURCE" ]; then
-            DIR="$(dirname "$SOURCE")"; FILE="$(basename "$SOURCE")"
-            [ "$DIR" = "." ] && DIR="${SOURCE%%:*}:"
+            case "$SOURCE" in *:*) ;; *) echo "::error::'source' doit avoir la forme remote:chemin/fichier.mp4 (ex: gdrive:videos/long.mp4)"; exit 1;; esac
+            # remote:dossier/fichier.mp4 -> DIR=remote:dossier, FILE=fichier.mp4 ; remote:fichier.mp4 -> DIR=remote:, FILE=fichier.mp4
+            REMOTE="${SOURCE%%:*}:"; PATHPART="${SOURCE#*:}"
+            if [[ "$PATHPART" == */* ]]; then DIR="$REMOTE${PATHPART%/*}"; FILE="${PATHPART##*/}"; else DIR="$REMOTE"; FILE="$PATHPART"; fi
+            # 1) rclone voit-il le fichier ? Sinon on affiche ce qu'il voit, pour trouver le bon chemin
+            if ! rclone lsf "$SOURCE" > source-check.txt 2> source-check.err || [ ! -s source-check.txt ]; then
+              echo "::error::Fichier introuvable via rclone : $SOURCE"
+              echo "--- Message rclone :"; tail -5 source-check.err
+              echo "--- Ce que rclone voit dans $DIR :"; rclone lsf "$DIR" --max-depth 1 2>&1 | head -40
+              echo "Vérifie : le chemin exact (dossiers compris), les majuscules, l'extension, et que le fichier n'est pas seulement 'Partagé avec moi'."
+              exit 1
+            fi
+            # 2) serveur local sur le stockage
             setsid nohup rclone serve http "$DIR" --addr 127.0.0.1:8081 --read-only > rclone-serve.log 2>&1 &
             ENC="$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1]))' "$FILE")"
             SRC="http://127.0.0.1:8081/$ENC"
-            for i in $(seq 1 30); do curl -fsI "$SRC" > /dev/null 2>&1 && break; sleep 1; done
-            curl -fsI "$SRC" > /dev/null || { echo "Source introuvable via rclone : $SOURCE"; cat rclone-serve.log; exit 1; }
+            CODE=000
+            for i in $(seq 1 30); do
+              CODE=$(curl -s -o /dev/null -w "%{http_code}" -r 0-0 "$SRC" || true)
+              case "$CODE" in 200|206) break;; esac
+              sleep 1
+            done
+            case "$CODE" in 200|206) ;; *) echo "::error::Serveur rclone : réponse HTTP $CODE pour $SRC"; cat rclone-serve.log; exit 1;; esac
             echo "OUT_BASENAME=${FILE%.*}" >> "$GITHUB_ENV"
           elif [ -n "$RELEASE_TAG" ] && [ -n "$VIDEO_ASSET" ]; then
             gh release download "$RELEASE_TAG" --repo "${{ github.repository }}" --pattern "$VIDEO_ASSET" --output "input/video.mp4" --clobber
@@ -112,12 +129,15 @@ jobs:
         id: orient
         env:
           VIDEO_PATH: ${{ env.SRC }}
+          BGH: ${{ github.event.inputs.background_file }}
+          BGV: ${{ github.event.inputs.background_file_vertical }}
         run: |
           python3 - <<'PY'
           import json, os, subprocess
-          src = os.environ["VIDEO_PATH"]
+          src = os.environ.get("VIDEO_PATH") or os.environ["SRC"]
           j = json.loads(subprocess.check_output(["ffprobe", "-v", "error", "-select_streams", "v:0",
-              "-show_entries", "stream=width,height:stream_side_data=rotation", "-of", "json", src]))
+              "-show_entries", "stream=width,height,color_transfer,avg_frame_rate,r_frame_rate:stream_side_data=rotation",
+              "-of", "json", src]))
           s = j["streams"][0]
           w, h = int(s["width"]), int(s["height"])
           rot = 0
@@ -127,16 +147,35 @@ jobs:
           if abs(rot) % 180 == 90:      # vidéo tournée par métadonnée (téléphone) : on inverse
               w, h = h, w
           vertical = h > w
-          k = min(1.0, 1920.0 / max(w, h))
-          ow, oh = int(round(w * k / 2.0)) * 2, int(round(h * k / 2.0)) * 2
-          print("Vidéo %dx%d -> %s, sortie %dx%d" % (w, h, "VERTICALE" if vertical else "horizontale", ow, oh))
+          if not vertical and abs(w / float(h) - 16 / 9.0) < 0.012:
+              ow, oh = 1920, 1080       # 16:9 : sortie standard, comme avant
+          else:
+              k = min(1.0, 1920.0 / max(w, h))
+              ow, oh = int(round(w * k / 2.0)) * 2, int(round(h * k / 2.0)) * 2
+          hdr = s.get("color_transfer") in ("smpte2084", "arib-std-b67")
+
+          def to_rate(t):
+              try:
+                  a, b = [float(x) for x in t.split("/")] if "/" in t else (float(t), 1.0)
+                  return a / b if b else 0.0
+              except Exception:
+                  return 0.0
+          rate = to_rate(s.get("avg_frame_rate", ""))
+          if not 5.0 <= rate <= 120.0:
+              alt = to_rate(s.get("r_frame_rate", ""))
+              rate = alt if 5.0 <= alt <= 120.0 else 30.0
+          std = {"24000/1001": 23.976, "24": 24.0, "25": 25.0, "30000/1001": 29.97, "30": 30.0, "50": 50.0, "60000/1001": 59.94, "60": 60.0}
+          best = min(std.items(), key=lambda kv: abs(kv[1] - rate))
+          fps = best[0] if abs(best[1] - rate) / rate < 0.01 else "%.3f" % rate
+
+          print("Vidéo %dx%d -> %s, sortie %dx%d, %s i/s%s" % (w, h, "VERTICALE" if vertical else "horizontale", ow, oh, fps, ", HDR (conversion SDR)" if hdr else ""))
           with open(os.environ["GITHUB_OUTPUT"], "a") as o:
-              o.write("vertical=%s\nout_w=%d\nout_h=%d\n" % ("true" if vertical else "false", ow, oh))
+              o.write("vertical=%s\nout_w=%d\nout_h=%d\nhdr=%s\nfps=%s\n" % ("true" if vertical else "false", ow, oh, "true" if hdr else "false", fps))
           PY
           if [ "$(grep '^vertical=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2)" = "true" ]; then
-            test -f "input/${{ github.event.inputs.background_file_vertical || 'background-vertical.jpg' }}" || { echo "Image de fond verticale introuvable dans input/"; exit 1; }
+            test -f "input/${BGV:-background-vertical.jpg}" || { echo "Image de fond verticale introuvable dans input/"; exit 1; }
           else
-            test -f "input/${{ github.event.inputs.background_file || 'background.jpg' }}" || { echo "Image de fond introuvable dans input/"; exit 1; }
+            test -f "input/${BGH:-background.jpg}" || { echo "Image de fond introuvable dans input/"; exit 1; }
           fi
 
       - name: Analyser la vidéo (couleur du fond, tolérance, seuil, découpage)
@@ -144,11 +183,13 @@ jobs:
         env:
           KEY_OVERRIDE: ${{ github.event.inputs.key_color }}
           CHUNK_MINUTES: ${{ github.event.inputs.chunk_minutes }}
+          HDR: ${{ steps.orient.outputs.hdr }}
         run: |
           cat > plan.py <<'PY'
           import os, math, json, subprocess, statistics as st
           SRC = os.environ["SRC"]
           W, H, N = 192, 108, 12
+          TM = "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=mobius:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p," if os.environ.get("HDR") == "true" else ""
 
           def probe(*args):
               return subprocess.check_output(["ffprobe", "-v", "error", *args, SRC]).decode().strip()
@@ -158,8 +199,16 @@ jobs:
           has_audio = "true" if probe("-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0") else "false"
 
           # Cadence constante : on arrondit à la valeur standard la plus proche (ex: 30.05 -> 30)
-          num, den = [float(x) for x in fps.split("/")] if "/" in fps else (float(fps), 1.0)
-          rate = num / den
+          def to_rate(txt):
+              try:
+                  a, b = [float(x) for x in txt.split("/")] if "/" in txt else (float(txt), 1.0)
+                  return a / b if b else 0.0
+              except Exception:
+                  return 0.0
+          rate = to_rate(fps)
+          if not 5.0 <= rate <= 120.0:          # 0/0, 90000/1... : on essaie la cadence nominale, sinon 30
+              alt = to_rate(probe("-select_streams", "v:0", "-show_entries", "stream=r_frame_rate", "-of", "csv=p=0"))
+              rate = alt if 5.0 <= alt <= 120.0 else 30.0
           std = {"24000/1001": 23.976, "24": 24.0, "25": 25.0, "30000/1001": 29.97, "30": 30.0,
                  "50": 50.0, "60000/1001": 59.94, "60": 60.0}
           best = min(std.items(), key=lambda kv: abs(kv[1] - rate))
@@ -171,9 +220,11 @@ jobs:
           for k in range(N):
               t = dur * (k + 0.5) / N
               raw = subprocess.check_output(["ffmpeg", "-v", "error", "-ss", "%.3f" % t, "-i", SRC, "-frames:v", "1",
-                                             "-vf", "scale=%d:%d:flags=area,format=rgb24" % (W, H), "-f", "rawvideo", "-"])
+                                             "-vf", TM + "scale=%d:%d:flags=area,format=rgb24" % (W, H), "-f", "rawvideo", "-"])
               if len(raw) == fs:
                   frames.append(raw)
+          if not frames:
+              raise SystemExit("Impossible de lire des images de la vidéo (durée incohérente ou fichier corrompu)")
 
           def exg(p): return p[1] - (p[0] + p[2]) / 2
           def uvmag(r, g, b):
@@ -208,7 +259,12 @@ jobs:
           hexk = "%02X%02X%02X" % (R, G, B)
           print("Fond : #%s  EK=%.1f  tolérance=%.3f  seuil=%.1f" % (hexk, EK, SIM, THR))
 
-          L = max(float(os.environ.get("CHUNK_MINUTES") or 10), 1.0) * 60
+          try:
+              cm = float(os.environ.get("CHUNK_MINUTES") or 10)
+          except ValueError:
+              cm = 10.0
+          L = max(cm, 1.0) * 60
+          L = max(L, dur / 250.0)               # jamais plus de 256 morceaux (limite de la matrice GitHub)
           include, start, idx = [], 0.0, 0
           while start < dur - 0.05:
               ln = min(L, dur - start)
@@ -240,6 +296,7 @@ jobs:
       KEY_EK: ${{ needs.prepare.outputs.key_ek }}
       KEY_SIM: ${{ needs.prepare.outputs.key_sim }}
       KEY_THR: ${{ needs.prepare.outputs.key_thr }}
+      HDR: ${{ needs.prepare.outputs.hdr }}
     steps:
       - name: Checkout du repo
         uses: actions/checkout@v4
@@ -247,7 +304,7 @@ jobs:
       - name: Installer FFmpeg et rclone
         run: |
           sudo apt-get update && sudo apt-get install -y ffmpeg
-          curl -fsSL https://rclone.org/install.sh | sudo bash
+          (curl -fsSL https://rclone.org/install.sh | sudo bash) || sudo apt-get install -y rclone
 
       - name: Configurer rclone
         env:
@@ -265,16 +322,34 @@ jobs:
         run: |
           mkdir -p input
           if [ -n "$SOURCE" ]; then
-            DIR="$(dirname "$SOURCE")"; FILE="$(basename "$SOURCE")"
-            [ "$DIR" = "." ] && DIR="${SOURCE%%:*}:"
+            case "$SOURCE" in *:*) ;; *) echo "::error::'source' doit avoir la forme remote:chemin/fichier.mp4 (ex: gdrive:videos/long.mp4)"; exit 1;; esac
+            # remote:dossier/fichier.mp4 -> DIR=remote:dossier, FILE=fichier.mp4 ; remote:fichier.mp4 -> DIR=remote:, FILE=fichier.mp4
+            REMOTE="${SOURCE%%:*}:"; PATHPART="${SOURCE#*:}"
+            if [[ "$PATHPART" == */* ]]; then DIR="$REMOTE${PATHPART%/*}"; FILE="${PATHPART##*/}"; else DIR="$REMOTE"; FILE="$PATHPART"; fi
+            # 1) rclone voit-il le fichier ? Sinon on affiche ce qu'il voit, pour trouver le bon chemin
+            if ! rclone lsf "$SOURCE" > source-check.txt 2> source-check.err || [ ! -s source-check.txt ]; then
+              echo "::error::Fichier introuvable via rclone : $SOURCE"
+              echo "--- Message rclone :"; tail -5 source-check.err
+              echo "--- Ce que rclone voit dans $DIR :"; rclone lsf "$DIR" --max-depth 1 2>&1 | head -40
+              echo "Vérifie : le chemin exact (dossiers compris), les majuscules, l'extension, et que le fichier n'est pas seulement 'Partagé avec moi'."
+              exit 1
+            fi
+            # 2) serveur local sur le stockage
             setsid nohup rclone serve http "$DIR" --addr 127.0.0.1:8081 --read-only > rclone-serve.log 2>&1 &
             ENC="$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1]))' "$FILE")"
             SRC="http://127.0.0.1:8081/$ENC"
-            for i in $(seq 1 30); do curl -fsI "$SRC" > /dev/null 2>&1 && break; sleep 1; done
-            curl -fsI "$SRC" > /dev/null || { echo "Source introuvable via rclone : $SOURCE"; cat rclone-serve.log; exit 1; }
-          else
+            CODE=000
+            for i in $(seq 1 30); do
+              CODE=$(curl -s -o /dev/null -w "%{http_code}" -r 0-0 "$SRC" || true)
+              case "$CODE" in 200|206) break;; esac
+              sleep 1
+            done
+            case "$CODE" in 200|206) ;; *) echo "::error::Serveur rclone : réponse HTTP $CODE pour $SRC"; cat rclone-serve.log; exit 1;; esac
+          elif [ -n "$RELEASE_TAG" ] && [ -n "$VIDEO_ASSET" ]; then
             gh release download "$RELEASE_TAG" --repo "${{ github.repository }}" --pattern "$VIDEO_ASSET" --output "input/video.mp4" --clobber
             SRC="input/video.mp4"
+          else
+            echo "Renseigne 'source' (rclone) ou 'release_tag' + 'video_asset'."; exit 1
           fi
           echo "SRC=$SRC" >> "$GITHUB_ENV"
 
@@ -315,13 +390,18 @@ jobs:
           LEN: ${{ matrix.len }}
           FPS: ${{ needs.prepare.outputs.fps }}
           HAS_AUDIO: ${{ needs.prepare.outputs.has_audio }}
+          BGH: ${{ github.event.inputs.background_file }}
+          OWV: ${{ needs.prepare.outputs.out_w }}
+          OHV: ${{ needs.prepare.outputs.out_h }}
         run: |
           mkdir -p output
-          BG="input/${{ github.event.inputs.background_file || 'background.jpg' }}"
+          BG="input/${BGH:-background.jpg}"
+          OW=${OWV:-1920}; OH=${OHV:-1080}
+          TM=""; [ "$HDR" = "true" ] && TM="zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=mobius:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,"
 
           FILTER="
-            [1:v]scale=1920:1080,setsar=1[bg];
-            [0:v]scale=1920:1080,setsar=1,split=2[a][c];
+            [1:v]scale=$OW:$OH:force_original_aspect_ratio=increase,crop=$OW:$OH,setsar=1[bg];
+            [0:v]${TM}scale=$OW:$OH,setsar=1,split=2[a][c];
             [a]format=yuva420p,chromakey=0x$KEY_HEX:$KEY_SIM:0.06,alphaextract,erosion,erosion,erosion,boxblur=1:1[mat];
             [c]format=gbrp,lut3d=file=unmix.cube:interp=tetrahedral,format=rgba[cl];
             [cl][mat]alphamerge[fg];
@@ -340,7 +420,7 @@ jobs:
             -filter_complex "$FILTER" \
             -map "[out]" \
             -c:v libx264 -preset slow -crf 17 -pix_fmt yuv420p -r "$FPS" -fps_mode cfr \
-            "output/chunk_$IDX.mp4" \
+            -t "$LEN" "output/chunk_$IDX.mp4" \
             "${AUDIO_OUT[@]}"
 
       - name: Composer le morceau VERTICAL (même traitement, format portrait)
@@ -351,14 +431,18 @@ jobs:
           LEN: ${{ matrix.len }}
           FPS: ${{ needs.prepare.outputs.fps }}
           HAS_AUDIO: ${{ needs.prepare.outputs.has_audio }}
+          BGV: ${{ github.event.inputs.background_file_vertical }}
+          OWV: ${{ needs.prepare.outputs.out_w }}
+          OHV: ${{ needs.prepare.outputs.out_h }}
         run: |
           mkdir -p output
-          BG="input/${{ github.event.inputs.background_file_vertical || 'background-vertical.jpg' }}"
-          OW=${{ needs.prepare.outputs.out_w }}; OH=${{ needs.prepare.outputs.out_h }}
+          BG="input/${BGV:-background-vertical.jpg}"
+          OW=${OWV:-1080}; OH=${OHV:-1920}
+          TM=""; [ "$HDR" = "true" ] && TM="zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=mobius:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,"
 
           FILTER="
             [1:v]scale=$OW:$OH:force_original_aspect_ratio=increase,crop=$OW:$OH,setsar=1[bg];
-            [0:v]scale=$OW:$OH,setsar=1,split=2[a][c];
+            [0:v]${TM}scale=$OW:$OH,setsar=1,split=2[a][c];
             [a]format=yuva420p,chromakey=0x$KEY_HEX:$KEY_SIM:0.06,alphaextract,erosion,erosion,erosion,boxblur=1:1[mat];
             [c]format=gbrp,lut3d=file=unmix.cube:interp=tetrahedral,format=rgba[cl];
             [cl][mat]alphamerge[fg];
@@ -377,7 +461,7 @@ jobs:
             -filter_complex "$FILTER" \
             -map "[out]" \
             -c:v libx264 -preset slow -crf 17 -pix_fmt yuv420p -r "$FPS" -fps_mode cfr \
-            "output/chunk_$IDX.mp4" \
+            -t "$LEN" "output/chunk_$IDX.mp4" \
             "${AUDIO_OUT[@]}"
 
       - name: Envoyer le morceau sur le stockage externe
@@ -400,7 +484,7 @@ jobs:
       - name: Installer FFmpeg et rclone
         run: |
           sudo apt-get update && sudo apt-get install -y ffmpeg
-          curl -fsSL https://rclone.org/install.sh | sudo bash
+          (curl -fsSL https://rclone.org/install.sh | sudo bash) || sudo apt-get install -y rclone
 
       - name: Configurer rclone
         env:
@@ -419,9 +503,19 @@ jobs:
           TMP="$DEST/.tmp-run-${{ github.run_id }}"
           # Les morceaux sont lus directement sur le stockage (pas de double copie sur le disque)
           setsid nohup rclone serve http "$TMP" --addr 127.0.0.1:8082 --read-only > serve.log 2>&1 &
-          for i in $(seq 1 30); do curl -fsI "http://127.0.0.1:8082/chunk_0.mp4" > /dev/null 2>&1 && break; sleep 1; done
+          for i in $(seq 1 30); do curl -fs -r 0-0 -o /dev/null "http://127.0.0.1:8082/chunk_0.mp4" > /dev/null 2>&1 && break; sleep 1; done
 
           N=$(python3 -c 'import os,json;print(len(json.loads(os.environ["MATRIX"])["include"]))')
+          for i in $(seq 0 $((N-1))); do
+            curl -fs -r 0-0 -o /dev/null "http://127.0.0.1:8082/chunk_$i.mp4" || { echo "::error::Morceau $i introuvable sur le stockage ($TMP). Relance les jobs en échec (Re-run failed jobs)."; exit 1; }
+          done
+          NEED=$(rclone size "$TMP" --json | python3 -c 'import sys,json;print(json.load(sys.stdin)["bytes"])')
+          AVAIL=$(df --output=avail -B1 / | tail -1)
+          echo "Taille des morceaux : $NEED octets ; espace disque libre : $AVAIL octets"
+          if [ "$NEED" -gt $((AVAIL - 1000000000)) ]; then
+            echo "::error::Espace disque insuffisant pour assembler le fichier final (vidéo trop longue pour un runner GitHub). Réduis la durée ou la qualité."
+            exit 1
+          fi
           : > videos.txt; : > audios.txt
           for i in $(seq 0 $((N-1))); do
             echo "file 'http://127.0.0.1:8082/chunk_$i.mp4'" >> videos.txt

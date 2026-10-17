@@ -15,6 +15,7 @@ Les vidéos (volumineuses) passent par les **Releases GitHub** (jusqu'à environ
 |---|---|
 | `.github/workflows/replace-background.yml` | Workflow principal (vidéos courtes, et aiguillage automatique) |
 | `.github/workflows/replace-background-long.yml` | Workflow des vidéos longues (lancé automatiquement, ou à la main) |
+| `.github/workflows/replace-background-assemble.yml` | Secours : recolle des morceaux déjà traités si l'étape finale a échoué |
 | `input/background.jpg` | Image de fond pour les vidéos **horizontales** |
 | `input/background-vertical.jpg` | Image de fond pour les vidéos **verticales** |
 
@@ -78,7 +79,7 @@ Le traitement lui-même (chromakey serré, masque érodé et adouci, reconstruct
 
 Si la vidéo dépasse **15 minutes**, le workflow principal lance automatiquement **Replace Green Screen Background (vidéos longues)** :
 1. La couleur du fond est mesurée une seule fois pour toute la vidéo.
-2. La vidéo est découpée en morceaux de 10 minutes (`chunk_minutes`), traités **en parallèle**.
+2. La vidéo est découpée en morceaux traités **en parallèle** : par défaut, environ 12 morceaux de 3 à 10 minutes selon la durée de la vidéo (réglable avec `chunk_minutes`).
 3. Les morceaux sont recollés avec le son, puis envoyés sur ton stockage externe.
 4. Un seul fichier est produit ; le lien (si ton stockage en fournit un) est affiché dans le résumé du run.
 
@@ -93,6 +94,17 @@ Ne partage jamais le contenu de `rclone.conf` : il donne accès à ton stockage.
 
 Sans cette configuration, une vidéo longue est traitée normalement par le workflow principal, avec un avertissement : le résultat risque de dépasser les limites de GitHub (voir plus bas).
 
+### Si l'étape finale a échoué : workflow de secours
+
+Les morceaux déjà traités restent sur ton stockage, dans le dossier `.tmp-run-<numéro du run>`. Inutile de tout retraiter : lance **Recoller des morceaux déjà traités (secours)** (`replace-background-assemble.yml`) avec :
+
+| Champ | Rôle |
+|---|---|
+| `run_id` | Le numéro du run (celui du dossier `.tmp-run-...`) |
+| `chunks` | Nombre de morceaux (1 s'il n'y a que `chunk_0`) |
+| `has_audio` | `true` s'il y a des fichiers `.wav` |
+| `out_name` | Nom du fichier final (ex: `ma_video_fond-remplace.mp4`) |
+
 ### Lancer à la main (vidéos de plus de 2 Go)
 
 Une vidéo de plus de 2 Go ne peut pas passer par une Release. Dépose-la sur ton stockage, puis lance **Replace Green Screen Background (vidéos longues)** avec :
@@ -103,7 +115,7 @@ Une vidéo de plus de 2 Go ne peut pas passer par une Release. Dépose-la sur to
 | `dest` | Dossier de destination (vide = variable `RCLONE_DEST`) |
 | `background_file` / `background_file_vertical` | Fonds, comme ci-dessus |
 | `key_color` | Optionnel, comme ci-dessus |
-| `chunk_minutes` | Durée de chaque morceau (défaut : 10) |
+| `chunk_minutes` | Durée de chaque morceau en minutes. Vide = automatique (défaut) |
 
 Si la vidéo est dans une Release, renseigne `release_tag` et `video_asset` à la place de `source`.
 
@@ -121,8 +133,9 @@ Avec le `client_id` partagé de rclone, rclone affiche l'avertissement « This r
 | Vidéo longue traitée normalement avec un avertissement | Le stockage externe n'est pas configuré : voir plus haut |
 | `Fichier introuvable via rclone` | Le log liste ce que rclone voit dans le dossier : corrige le chemin (dossiers, majuscules, extension). Un fichier « Partagé avec moi » n'est pas visible |
 | `Serveur rclone : réponse HTTP ...` | rclone voit le fichier mais ne peut pas le lire : vérifie les droits du stockage et le `client_id` (voir plus haut) |
-| `Morceau N introuvable sur le stockage` | Un morceau a échoué : dans le run, **Re-run failed jobs** |
-| `Espace disque insuffisant pour assembler` | La vidéo est trop longue pour un runner GitHub (environ 5 h maximum) : réduis la durée |
+| `Morceaux manquants dans ...` | Un morceau n'est pas sur le stockage : **Re-run failed jobs** dans le run, ou voir le workflow de secours |
+| `Le morceau N n'apparaît pas sur le stockage après l'envoi` | L'envoi du morceau a échoué : relance ce job |
+| `Espace disque insuffisant pour assembler` | La vidéo est trop longue pour un runner GitHub (environ 3 h maximum) : réduis la durée |
 | `Impossible de lire des images de la vidéo` | Le fichier est corrompu ou sa durée est incohérente : ré-exporte la vidéo |
 
 ## Conseils tournage

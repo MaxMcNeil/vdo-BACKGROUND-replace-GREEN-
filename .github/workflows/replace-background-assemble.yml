@@ -1,0 +1,124 @@
+name: Recoller des morceaux déjà traités (secours)
+
+# À utiliser quand l'étape finale d'un run « vidéos longues » a échoué alors que les morceaux
+# sont déjà sur ton stockage (dossier .tmp-run-<numéro>) : inutile de tout retraiter.
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'Numéro du run (le dossier sur ton stockage s appelle .tmp-run-<numéro>)'
+        required: true
+      chunks:
+        description: 'Nombre de morceaux (chunk_0, chunk_1, ...)'
+        required: true
+        default: '1'
+      has_audio:
+        description: "Les morceaux ont-ils un fichier audio .wav ? 'true' ou 'false'"
+        required: false
+        default: 'true'
+      out_name:
+        description: 'Nom du fichier final (ex: ma_video_fond-remplace.mp4)'
+        required: true
+      dest:
+        description: 'Dossier rclone (ex: gdrive:resultats). Vide = variable RCLONE_DEST'
+        required: false
+        default: ''
+
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    env:
+      DEST: ${{ github.event.inputs.dest || vars.RCLONE_DEST }}
+      RUN_ID: ${{ github.event.inputs.run_id }}
+      N_CHUNKS: ${{ github.event.inputs.chunks }}
+      HAS_AUDIO: ${{ github.event.inputs.has_audio }}
+      OUT_NAME: ${{ github.event.inputs.out_name }}
+    steps:
+      - name: Libérer de l'espace disque
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - name: Installer FFmpeg et rclone
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+          (curl -fsSL https://rclone.org/install.sh | sudo bash) || sudo apt-get install -y rclone
+
+      - name: Configurer rclone
+        env:
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          if [ -z "$RCLONE_CONFIG_CONTENT" ]; then echo "Secret RCLONE_CONFIG manquant"; exit 1; fi
+          mkdir -p ~/.config/rclone
+          printf '%s\n' "$RCLONE_CONFIG_CONTENT" > ~/.config/rclone/rclone.conf
+
+      - name: Recoller les morceaux et publier
+        run: |
+          TMP="$DEST/.tmp-run-$RUN_ID"
+          N=${N_CHUNKS:-$(python3 -c 'import os,json;print(len(json.loads(os.environ["MATRIX"])["include"]))')}
+
+          # 1) les morceaux sont-ils bien sur le stockage ? (un listing peut avoir quelques secondes de retard)
+          OK=0
+          for t in $(seq 1 18); do
+            rclone lsf "$TMP" > listing.txt 2> listing.err || true
+            OK=1
+            for i in $(seq 0 $((N-1))); do
+              grep -qxF "chunk_$i.mp4" listing.txt || OK=0
+              if [ "$HAS_AUDIO" = "true" ]; then grep -qxF "chunk_$i.wav" listing.txt || OK=0; fi
+            done
+            [ "$OK" = 1 ] && break
+            sleep 10
+          done
+          if [ "$OK" != 1 ]; then
+            echo "::error::Morceaux manquants dans $TMP ($N attendus). Relance les jobs en échec (Re-run failed jobs)."
+            echo "--- Contenu trouvé :"; cat listing.txt; tail -5 listing.err
+            exit 1
+          fi
+
+          # 2) place disque : morceaux téléchargés + fichier final
+          NEED=$(rclone size "$TMP" --json | python3 -c 'import sys,json;print(json.load(sys.stdin)["bytes"])')
+          AVAIL=$(df --output=avail -B1 / | tail -1)
+          echo "Taille des morceaux : $NEED octets ; espace disque libre : $AVAIL octets"
+          if [ $((NEED * 2)) -gt $((AVAIL - 1000000000)) ]; then
+            echo "::error::Espace disque insuffisant pour assembler le fichier final (vidéo trop longue pour un runner GitHub, environ 3 h maximum). Réduis la durée."
+            exit 1
+          fi
+
+          # 3) télécharger les morceaux
+          mkdir -p chunks
+          rclone copy "$TMP" chunks --include "chunk_*" --transfers 4 --retries 5
+          for i in $(seq 0 $((N-1))); do
+            test -s "chunks/chunk_$i.mp4" || { echo "::error::Morceau $i non téléchargé"; exit 1; }
+            if [ "$HAS_AUDIO" = "true" ]; then test -s "chunks/chunk_$i.wav" || { echo "::error::Audio du morceau $i non téléchargé"; exit 1; }; fi
+          done
+
+          # 4) recoller (image copiée telle quelle, son encodé une seule fois)
+          : > videos.txt; : > audios.txt
+          for i in $(seq 0 $((N-1))); do
+            echo "file '$PWD/chunks/chunk_$i.mp4'" >> videos.txt
+            echo "file '$PWD/chunks/chunk_$i.wav'" >> audios.txt
+          done
+          if [ "$HAS_AUDIO" = "true" ]; then
+            ffmpeg -y -f concat -safe 0 -i videos.txt \
+                      -f concat -safe 0 -i audios.txt \
+                      -map 0:v -map 1:a -c:v copy -c:a aac -b:a 192k -shortest -movflags +faststart final.mp4
+          else
+            ffmpeg -y -f concat -safe 0 -i videos.txt \
+                      -map 0:v -c:v copy -movflags +faststart final.mp4
+          fi
+          ls -lh final.mp4
+          rm -rf chunks
+
+          # 5) envoyer, lien, nettoyage
+          rclone copyto final.mp4 "$DEST/$OUT_NAME" --retries 5
+          LINK="$(rclone link "$DEST/$OUT_NAME" 2>/dev/null || true)"
+          {
+            echo "## Vidéo terminée"
+            echo "- Fichier : \`$DEST/$OUT_NAME\`"
+            [ -n "$LINK" ] && echo "- Lien : $LINK" || echo "- (ce stockage ne fournit pas de lien public : ouvre le fichier depuis ton stockage)"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          rclone purge "$TMP" || true

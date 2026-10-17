@@ -39,9 +39,9 @@ on:
         required: false
         default: ''
       chunk_minutes:
-        description: 'Durée de chaque morceau en minutes (traités en parallèle)'
+        description: 'Durée de chaque morceau en minutes (traités en parallèle). Vide = automatique (environ 12 morceaux, de 3 à 10 minutes)'
         required: false
-        default: '10'
+        default: ''
 
 jobs:
   prepare:
@@ -259,11 +259,13 @@ jobs:
           hexk = "%02X%02X%02X" % (R, G, B)
           print("Fond : #%s  EK=%.1f  tolérance=%.3f  seuil=%.1f" % (hexk, EK, SIM, THR))
 
+          raw_cm = (os.environ.get("CHUNK_MINUTES") or "").strip()
           try:
-              cm = float(os.environ.get("CHUNK_MINUTES") or 10)
+              L = max(float(raw_cm), 1.0) * 60 if raw_cm else None
           except ValueError:
-              cm = 10.0
-          L = max(cm, 1.0) * 60
+              L = None
+          if L is None:                         # automatique : ~12 morceaux en parallèle, de 3 à 10 minutes chacun
+              L = min(max(dur / 12.0, 180.0), 600.0)
           L = max(L, dur / 250.0)               # jamais plus de 256 morceaux (limite de la matrice GitHub)
           include, start, idx = [], 0.0, 0
           while start < dur - 0.05:
@@ -416,7 +418,7 @@ jobs:
 
           ffmpeg -y \
             -ss "$SS" -t "$LEN" -i "$SRC" \
-            -loop 1 -i "$BG" \
+            -framerate "$FPS" -loop 1 -i "$BG" \
             -filter_complex "$FILTER" \
             -map "[out]" \
             -c:v libx264 -preset slow -crf 17 -pix_fmt yuv420p -r "$FPS" -fps_mode cfr \
@@ -457,7 +459,7 @@ jobs:
 
           ffmpeg -y \
             -ss "$SS" -t "$LEN" -i "$SRC" \
-            -loop 1 -i "$BG" \
+            -framerate "$FPS" -loop 1 -i "$BG" \
             -filter_complex "$FILTER" \
             -map "[out]" \
             -c:v libx264 -preset slow -crf 17 -pix_fmt yuv420p -r "$FPS" -fps_mode cfr \
@@ -471,6 +473,7 @@ jobs:
         run: |
           TMP="$DEST/.tmp-run-${{ github.run_id }}"
           rclone copy output/ "$TMP" --include "chunk_$IDX.*" --transfers 2 --retries 5
+          echo "Morceau $IDX envoyé. Contenu de $TMP :"; rclone lsf "$TMP" | grep "chunk_$IDX\\." || { echo "::error::Le morceau $IDX n'apparaît pas sur le stockage après l'envoi"; exit 1; }
 
   assemble:
     needs: [prepare, chunks]
@@ -499,40 +502,64 @@ jobs:
           MATRIX: ${{ needs.prepare.outputs.matrix }}
           HAS_AUDIO: ${{ needs.prepare.outputs.has_audio }}
           OUT_NAME: ${{ needs.prepare.outputs.out_name }}
+          RUN_ID: ${{ github.run_id }}
         run: |
-          TMP="$DEST/.tmp-run-${{ github.run_id }}"
-          # Les morceaux sont lus directement sur le stockage (pas de double copie sur le disque)
-          setsid nohup rclone serve http "$TMP" --addr 127.0.0.1:8082 --read-only > serve.log 2>&1 &
-          for i in $(seq 1 30); do curl -fs -r 0-0 -o /dev/null "http://127.0.0.1:8082/chunk_0.mp4" > /dev/null 2>&1 && break; sleep 1; done
+          TMP="$DEST/.tmp-run-$RUN_ID"
+          N=${N_CHUNKS:-$(python3 -c 'import os,json;print(len(json.loads(os.environ["MATRIX"])["include"]))')}
 
-          N=$(python3 -c 'import os,json;print(len(json.loads(os.environ["MATRIX"])["include"]))')
-          for i in $(seq 0 $((N-1))); do
-            curl -fs -r 0-0 -o /dev/null "http://127.0.0.1:8082/chunk_$i.mp4" || { echo "::error::Morceau $i introuvable sur le stockage ($TMP). Relance les jobs en échec (Re-run failed jobs)."; exit 1; }
+          # 1) les morceaux sont-ils bien sur le stockage ? (un listing peut avoir quelques secondes de retard)
+          OK=0
+          for t in $(seq 1 18); do
+            rclone lsf "$TMP" > listing.txt 2> listing.err || true
+            OK=1
+            for i in $(seq 0 $((N-1))); do
+              grep -qxF "chunk_$i.mp4" listing.txt || OK=0
+              if [ "$HAS_AUDIO" = "true" ]; then grep -qxF "chunk_$i.wav" listing.txt || OK=0; fi
+            done
+            [ "$OK" = 1 ] && break
+            sleep 10
           done
+          if [ "$OK" != 1 ]; then
+            echo "::error::Morceaux manquants dans $TMP ($N attendus). Relance les jobs en échec (Re-run failed jobs)."
+            echo "--- Contenu trouvé :"; cat listing.txt; tail -5 listing.err
+            exit 1
+          fi
+
+          # 2) place disque : morceaux téléchargés + fichier final
           NEED=$(rclone size "$TMP" --json | python3 -c 'import sys,json;print(json.load(sys.stdin)["bytes"])')
           AVAIL=$(df --output=avail -B1 / | tail -1)
           echo "Taille des morceaux : $NEED octets ; espace disque libre : $AVAIL octets"
-          if [ "$NEED" -gt $((AVAIL - 1000000000)) ]; then
-            echo "::error::Espace disque insuffisant pour assembler le fichier final (vidéo trop longue pour un runner GitHub). Réduis la durée ou la qualité."
+          if [ $((NEED * 2)) -gt $((AVAIL - 1000000000)) ]; then
+            echo "::error::Espace disque insuffisant pour assembler le fichier final (vidéo trop longue pour un runner GitHub, environ 3 h maximum). Réduis la durée."
             exit 1
           fi
-          : > videos.txt; : > audios.txt
+
+          # 3) télécharger les morceaux
+          mkdir -p chunks
+          rclone copy "$TMP" chunks --include "chunk_*" --transfers 4 --retries 5
           for i in $(seq 0 $((N-1))); do
-            echo "file 'http://127.0.0.1:8082/chunk_$i.mp4'" >> videos.txt
-            echo "file 'http://127.0.0.1:8082/chunk_$i.wav'" >> audios.txt
+            test -s "chunks/chunk_$i.mp4" || { echo "::error::Morceau $i non téléchargé"; exit 1; }
+            if [ "$HAS_AUDIO" = "true" ]; then test -s "chunks/chunk_$i.wav" || { echo "::error::Audio du morceau $i non téléchargé"; exit 1; }; fi
           done
 
-          WL="file,http,tcp,crypto,data"
+          # 4) recoller (image copiée telle quelle, son encodé une seule fois)
+          : > videos.txt; : > audios.txt
+          for i in $(seq 0 $((N-1))); do
+            echo "file '$PWD/chunks/chunk_$i.mp4'" >> videos.txt
+            echo "file '$PWD/chunks/chunk_$i.wav'" >> audios.txt
+          done
           if [ "$HAS_AUDIO" = "true" ]; then
-            ffmpeg -y -protocol_whitelist "$WL" -f concat -safe 0 -i videos.txt \
-                      -protocol_whitelist "$WL" -f concat -safe 0 -i audios.txt \
+            ffmpeg -y -f concat -safe 0 -i videos.txt \
+                      -f concat -safe 0 -i audios.txt \
                       -map 0:v -map 1:a -c:v copy -c:a aac -b:a 192k -shortest -movflags +faststart final.mp4
           else
-            ffmpeg -y -protocol_whitelist "$WL" -f concat -safe 0 -i videos.txt \
+            ffmpeg -y -f concat -safe 0 -i videos.txt \
                       -map 0:v -c:v copy -movflags +faststart final.mp4
           fi
-
           ls -lh final.mp4
+          rm -rf chunks
+
+          # 5) envoyer, lien, nettoyage
           rclone copyto final.mp4 "$DEST/$OUT_NAME" --retries 5
           LINK="$(rclone link "$DEST/$OUT_NAME" 2>/dev/null || true)"
           {

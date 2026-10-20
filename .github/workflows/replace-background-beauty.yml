@@ -1,0 +1,543 @@
+name: Replace Green Screen Background + Beauté (peau et yeux)
+
+permissions:
+  contents: write
+
+on:
+  # Lancement manuel : tu précises le tag de la Release qui contient la vidéo
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Tag de la Release contenant la vidéo (ex: v1)'
+        required: true
+      video_asset:
+        description: "Nom du fichier vidéo attaché à cette Release (ex: video.mp4)"
+        required: true
+      background_file:
+        description: 'Nom du fichier image de fond dans input/ (ex: background.jpg)'
+        required: false
+        default: 'background.jpg'
+      key_color:
+        description: 'Couleur du fond vert en hex (ex: 139D74). Laisser vide = mesure automatique'
+        required: false
+        default: ''
+      background_file_vertical:
+        description: 'Image de fond pour les vidéos VERTICALES, dans input/ (ex: background-vertical.jpg)'
+        required: false
+        default: 'background-vertical.jpg'
+      skin_strength:
+        description: "Peau plus claire : 0 = désactivé, 30 = discret (défaut), 50 = marqué"
+        required: false
+        default: '30'
+      eye_strength:
+        description: "Yeux bleus : 0 = désactivé, 80 = naturel (défaut), 100 = marqué"
+        required: false
+        default: '80'
+      preview_seconds:
+        description: "Test rapide : ne traiter que les N premières secondes (ex: 15). Vide = vidéo entière"
+        required: false
+        default: ''
+
+jobs:
+  replace-background:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout du repo
+        uses: actions/checkout@v4
+
+      - name: Installer FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Préparer les noms de fichiers
+        id: files
+        env:
+          BGFILE: ${{ github.event.inputs.background_file }}
+        run: |
+          BG="${BGFILE:-background.jpg}"
+          echo "bg=$BG" >> "$GITHUB_OUTPUT"
+
+      - name: Télécharger la vidéo depuis la Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RTAG: ${{ github.event.inputs.release_tag }}
+          RASSET: ${{ github.event.inputs.video_asset }}
+        run: |
+          mkdir -p input
+          gh release download "$RTAG" \
+            --repo "${{ github.repository }}" \
+            --pattern "$RASSET" \
+            --output "input/video.mp4" \
+            --clobber
+
+      - name: Vérifier que les fichiers existent
+        run: |
+          test -f "input/video.mp4" || (echo "Vidéo introuvable — vérifie le tag/nom d'asset de la Release" && exit 1)
+
+      - name: Vérifier la durée (limite de ce workflow)
+        env:
+          PREVIEW: ${{ github.event.inputs.preview_seconds }}
+        run: |
+          DUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "input/video.mp4")
+          echo "Durée de la vidéo : ${DUR}s"
+          if [ -z "$PREVIEW" ] && python3 -c "import sys; sys.exit(0 if float('$DUR') > 25*60 else 1)" 2>/dev/null; then
+            echo "::error::Ce workflow (peau + yeux) traite des vidéos jusqu'à 25 minutes : le traitement des yeux image par image est plus lent. Pour une vidéo plus longue, utilise le workflow standard, ou découpe la vidéo."
+            exit 1
+          fi
+
+      - name: Détecter l'orientation de la vidéo (horizontale / verticale)
+        id: orient
+        continue-on-error: true
+        env:
+          VIDEO_PATH: input/video.mp4
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess
+          src = os.environ.get("VIDEO_PATH") or os.environ["SRC"]
+          j = json.loads(subprocess.check_output(["ffprobe", "-v", "error", "-select_streams", "v:0",
+              "-show_entries", "stream=width,height,color_transfer,avg_frame_rate,r_frame_rate:stream_side_data=rotation",
+              "-of", "json", src]))
+          s = j["streams"][0]
+          w, h = int(s["width"]), int(s["height"])
+          rot = 0
+          for sd in s.get("side_data_list", []):
+              if "rotation" in sd:
+                  rot = int(round(float(sd["rotation"])))
+          if abs(rot) % 180 == 90:      # vidéo tournée par métadonnée (téléphone) : on inverse
+              w, h = h, w
+          vertical = h > w
+          if not vertical and abs(w / float(h) - 16 / 9.0) < 0.012:
+              ow, oh = 1920, 1080       # 16:9 : sortie standard, comme avant
+          else:
+              k = min(1.0, 1920.0 / max(w, h))
+              ow, oh = int(round(w * k / 2.0)) * 2, int(round(h * k / 2.0)) * 2
+          hdr = s.get("color_transfer") in ("smpte2084", "arib-std-b67")
+
+          def to_rate(t):
+              try:
+                  a, b = [float(x) for x in t.split("/")] if "/" in t else (float(t), 1.0)
+                  return a / b if b else 0.0
+              except Exception:
+                  return 0.0
+          rate = to_rate(s.get("avg_frame_rate", ""))
+          if not 5.0 <= rate <= 120.0:
+              alt = to_rate(s.get("r_frame_rate", ""))
+              rate = alt if 5.0 <= alt <= 120.0 else 30.0
+          std = {"24000/1001": 23.976, "24": 24.0, "25": 25.0, "30000/1001": 29.97, "30": 30.0, "50": 50.0, "60000/1001": 59.94, "60": 60.0}
+          best = min(std.items(), key=lambda kv: abs(kv[1] - rate))
+          fps = best[0] if abs(best[1] - rate) / rate < 0.01 else "%.3f" % rate
+
+          print("Vidéo %dx%d -> %s, sortie %dx%d, %s i/s%s" % (w, h, "VERTICALE" if vertical else "horizontale", ow, oh, fps, ", HDR (conversion SDR)" if hdr else ""))
+          with open(os.environ["GITHUB_OUTPUT"], "a") as o:
+              o.write("vertical=%s\nout_w=%d\nout_h=%d\nhdr=%s\nfps=%s\n" % ("true" if vertical else "false", ow, oh, "true" if hdr else "false", fps))
+          PY
+
+      - name: Analyser le fond vert (couleur, tolérance, seuil)
+        env:
+          KEY_OVERRIDE: ${{ github.event.inputs.key_color }}
+          HDR: ${{ steps.orient.outputs.hdr }}
+        run: |
+          cat > analyze.py <<'PY'
+          import os, math, subprocess, statistics as st
+          VIDEO = "input/video.mp4"
+          W, H, N = 192, 108, 12
+          TM = "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=mobius:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p," if os.environ.get("HDR") == "true" else ""
+          dur = float(subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", VIDEO]).decode().strip())
+          raw = subprocess.check_output(["ffmpeg", "-v", "error", "-i", VIDEO, "-vf", "fps=%.4f," % (N / dur) + TM + "scale=%d:%d:flags=area,format=rgb24" % (W, H), "-frames:v", str(N), "-f", "rawvideo", "-"])
+          fs = W * H * 3
+          frames = [raw[i * fs:(i + 1) * fs] for i in range(len(raw) // fs)]
+
+          def exg(p): return p[1] - (p[0] + p[2]) / 2
+          def uvmag(r, g, b):
+              u = -0.169 * r - 0.331 * g + 0.5 * b
+              v = 0.5 * r - 0.419 * g - 0.081 * b
+              return math.hypot(u, v)
+
+          override = os.environ.get("KEY_OVERRIDE", "").strip().lstrip("#").upper()
+          if len(override) == 6:
+              R, G, B = [int(override[i:i + 2], 16) for i in (0, 2, 4)]
+              print("Couleur imposée manuellement :", override)
+          else:
+              # Bords supposés libres : bandeau du haut + colonnes gauche/droite (haut de l'image)
+              px = []
+              for f in frames:
+                  for y in range(H):
+                      for x in range(W):
+                          if y < H * 0.15 or ((x < W * 0.06 or x >= W * 0.94) and y < H * 0.60):
+                              i = (y * W + x) * 3
+                              px.append((f[i], f[i + 1], f[i + 2]))
+              m = [st.median(p[i] for p in px) for i in range(3)]
+              good = [p for p in px if abs(exg(p) - exg(m)) < 40 and p[1] > p[0] and p[1] > p[2]]
+              if len(good) < 0.3 * len(px):
+                  raise SystemExit("Mesure du fond vert peu fiable : relance avec key_color renseigné")
+              R, G, B = [st.median(p[i] for p in good) for i in range(3)]
+              R, G, B = round(R), round(G), round(B)
+
+          EK = max(G - (R + B) / 2, 20.0)
+          # Référence calibrée sur le tissu d'origine (#139D74 -> tolérance 0.10, seuil 100)
+          ref = uvmag(19, 157, 116)
+          SIM = min(max(0.10 * uvmag(R, G, B) / ref, 0.05), 0.16)
+          lum = (R + G + B) / 3
+          THR = min(max(100 * lum / 98.0, 70.0), 150.0)
+          hexk = "%02X%02X%02X" % (R, G, B)
+          print("Fond : #%s  EK=%.1f  tolérance=%.3f  seuil=%.1f" % (hexk, EK, SIM, THR))
+          with open(os.environ["GITHUB_ENV"], "a") as e:
+              e.write("KEY_HEX=%s\nKEY_R=%d\nKEY_G=%d\nKEY_B=%d\nKEY_EK=%.2f\nKEY_SIM=%.3f\nKEY_THR=%.1f\n" % (hexk, R, G, B, EK, SIM, THR))
+          PY
+          python3 analyze.py
+
+      - name: Générer la table de couleurs (dé-mélange du vert)
+        run: |
+          # Pour chaque couleur RGB possible : estime la part de fond vert dans le pixel,
+          # reconstruit la vraie couleur du sujet (surtout utile sur les doigts flous),
+          # puis plafonne le vert/bleu résiduel. Pixels sombres (cheveux) préservés.
+          cat > mklut.py <<'PY'
+          import os
+          N = 65
+          K = (float(os.environ["KEY_R"]), float(os.environ["KEY_G"]), float(os.environ["KEY_B"]))
+          EK = float(os.environ["KEY_EK"])
+          THR = float(os.environ["KEY_THR"])
+          def f(r, g, b):
+              a = 1 - max(g - (r + b) / 2, 0) / EK
+              a = min(max(a, 0.4), 1.0)
+              if (r + g + b) / 3 > THR:
+                  r = min(max((r - (1 - a) * K[0]) / a, 0), 255)
+                  g = min(max((g - (1 - a) * K[1]) / a, 0), 255)
+                  b = min(max((b - (1 - a) * K[2]) / a, 0), 255)
+              g = min(g, (r + b) / 2)
+              b = min(b, r)
+              return r, g, b
+          with open("unmix.cube", "w") as o:
+              o.write('TITLE "unmix"\nLUT_3D_SIZE %d\n' % N)
+              for bi in range(N):
+                  for gi in range(N):
+                      for ri in range(N):
+                          r, g, b = f(ri * 255 / (N - 1), gi * 255 / (N - 1), bi * 255 / (N - 1))
+                          o.write("%.5f %.5f %.5f\n" % (r / 255, g / 255, b / 255))
+          PY
+          python3 mklut.py
+          test -s unmix.cube
+
+      - name: Préparer les effets (peau, force des yeux)
+        env:
+          SKIN_STRENGTH: ${{ github.event.inputs.skin_strength }}
+          EYE_STRENGTH: ${{ github.event.inputs.eye_strength }}
+        run: |
+          python3 - <<'PY'
+          import os
+          def num(name, default):
+              try:
+                  return min(max(float(os.environ.get(name, "") or default), 0.0), 100.0)
+              except ValueError:
+                  return float(default)
+          sk, ey = num("SKIN_STRENGTH", 30), num("EYE_STRENGTH", 80)
+          N = 65
+          def ramp(x, a, b): return min(max((x - a) / (b - a), 0.0), 1.0)
+          def f(r, g, b):
+              y = 0.299*r + 0.587*g + 0.114*b
+              cb = 128 - 0.168736*r - 0.331264*g + 0.5*b
+              cr = 128 + 0.5*r - 0.418688*g - 0.081312*b
+              m = ramp(cb, 71, 83) * (1 - ramp(cb, 121, 133)) * ramp(cr, 127, 139) * (1 - ramp(cr, 167, 179)) * ramp(y, 35, 75) * (1 - ramp(y, 235, 252))
+              return m * (1 - ramp(g - (r + b) / 2, 10, 30))      # pas de peau là où il reste du vert de fond
+          if sk > 0:
+              with open("skinmask.cube", "w") as o:
+                  o.write('TITLE "skin"\nLUT_3D_SIZE %d\n' % N)
+                  for bi in range(N):
+                      for gi in range(N):
+                          for ri in range(N):
+                              v = f(ri*255/(N-1), gi*255/(N-1), bi*255/(N-1)); o.write("%.5f %.5f %.5f\n" % (v, v, v))
+          with open(os.environ["GITHUB_ENV"], "a") as e:
+              e.write("SKIN_ON=%s\nSKIN_K=%.3f\nEYES_ON=%s\nEYE_STR=%.3f\n" % ("true" if sk > 0 else "false", sk / 50.0, "true" if ey > 0 else "false", ey / 100.0))
+          print("Peau : force %.0f | Yeux : force %.0f" % (sk, ey))
+          PY
+
+      - name: Détecter les yeux (masque image par image)
+        if: env.EYES_ON == 'true'
+        env:
+          OWV: ${{ steps.orient.outputs.out_w }}
+          OHV: ${{ steps.orient.outputs.out_h }}
+          FPSV: ${{ steps.orient.outputs.fps }}
+          HDR: ${{ steps.orient.outputs.hdr }}
+          PREVIEW: ${{ github.event.inputs.preview_seconds }}
+        run: |
+          python3 -m venv beauty-venv
+          if ! beauty-venv/bin/pip install --quiet mediapipe opencv-python-headless numpy; then
+            echo "::warning::Installation des outils de détection impossible : la vidéo sera produite sans changement des yeux."
+            exit 0
+          fi
+          if ! curl -fsSL --retry 3 --retry-delay 3 -o face_landmarker.task "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"; then
+            echo "::warning::Modèle de détection des visages non téléchargeable : la vidéo sera produite sans changement des yeux."
+            exit 0
+          fi
+          cat > beauty_eyes.py <<'PY'
+          import numpy as np, cv2, math
+
+          # indices MediaPipe FaceLandmarker (478 points, iris inclus)
+          RIGHT_EYE  = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246]   # œil droit du sujet (à gauche de l'image)
+          LEFT_EYE   = [263, 249, 390, 373, 374, 380, 381, 382, 362, 398, 384, 385, 386, 387, 388, 466]
+          RIGHT_IRIS = [468, 469, 470, 471, 472]
+          LEFT_IRIS  = [473, 474, 475, 476, 477]
+          SS = 4   # suréchantillonnage pour des bords propres
+
+          def smoothstep(x, a, b):
+              t = np.clip((x - a) / float(b - a), 0.0, 1.0)
+              return t * t * (3 - 2 * t)
+
+          RIGHT_EAR = ((33, 133), [(160, 144), (159, 145), (158, 153)])
+          LEFT_EAR  = ((362, 263), [(387, 373), (386, 374), (385, 380)])
+
+          def ear(lm, spec):
+              (a, b), pairs = spec
+              width = float(np.linalg.norm(lm[a] - lm[b]))
+              if width < 1e-3:
+                  return 0.0
+              return float(np.mean([np.linalg.norm(lm[u] - lm[v]) for u, v in pairs]) / width)
+
+          def one_eye(lm, eye_idx, iris_idx, ear_spec, luma, W, H, strength):
+              """Masque (float 0..1, taille image) de l'iris visible d'un oeil. lm : (478,2) en pixels."""
+              c = lm[iris_idx[0]]
+              ring = lm[iris_idx[1:]]
+              r = float(np.mean(np.linalg.norm(ring - c, axis=1)))
+              if not np.isfinite(r) or r < 2.0 or r > 0.2 * max(W, H):
+                  return None
+              pts = lm[eye_idx]
+              x0 = int(max(0, math.floor(min(pts[:, 0].min(), c[0] - r) - 4))); x1 = int(min(W, math.ceil(max(pts[:, 0].max(), c[0] + r) + 4)))
+              y0 = int(max(0, math.floor(min(pts[:, 1].min(), c[1] - r) - 4))); y1 = int(min(H, math.ceil(max(pts[:, 1].max(), c[1] + r) + 4)))
+              if x1 - x0 < 6 or y1 - y0 < 4:
+                  return None
+              w, h = x1 - x0, y1 - y0
+              # forme : disque de l'iris ∩ ouverture de la paupière (le clignement la referme tout seul)
+              big_disk = np.zeros((h * SS, w * SS), np.uint8)
+              cv2.circle(big_disk, (int(round((c[0] - x0) * SS)), int(round((c[1] - y0) * SS))), int(round(r * 1.02 * SS)), 255, -1, cv2.LINE_AA)
+              big_lid = np.zeros((h * SS, w * SS), np.uint8)
+              poly = ((pts - [x0, y0]) * SS).round().astype(np.int32)
+              cv2.fillPoly(big_lid, [poly], 255, cv2.LINE_AA)
+              k = max(1, int(round(SS * 0.8)))              # on rentre un peu sous le bord de la paupière (cils, ombre)
+              big_lid = cv2.erode(big_lid, np.ones((k, k), np.uint8))
+              shape = cv2.resize(cv2.bitwise_and(big_disk, big_lid), (w, h), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
+              # pupille protégée (géométrique) + pixels très sombres (cils) + reflets blancs
+              yy, xx = np.mgrid[y0:y1, x0:x1].astype(np.float32)
+              d = np.hypot(xx + 0.5 - c[0], yy + 0.5 - c[1]) / r
+              pupil = 1.0 - smoothstep(d, 0.30, 0.46)
+              L = luma[y0:y1, x0:x1].astype(np.float32)
+              limbal = 1.0 - smoothstep(d, 0.78, 1.02)     # bord de l'iris : on garde l'anneau sombre d'origine (rendu naturel)
+              m = shape * (1.0 - pupil) * limbal * smoothstep(L, 14, 30) * (1.0 - smoothstep(L, 200, 235))
+              # clignement : la pondération disparaît avant la fermeture complète
+              fade = float(smoothstep(np.array(ear(lm, ear_spec)), 0.10, 0.19))
+              m *= fade * strength
+              sigma = max(0.6, r * 0.10)
+              m = cv2.GaussianBlur(m, (0, 0), sigma)
+              return (x0, y0, m)
+
+          def eyes_mask(lm, luma, W, H, strength=1.0):
+              """lm: (478,2) pixels ; renvoie uint8 (H,W)"""
+              full = np.zeros((H, W), np.float32)
+              for eye_idx, iris_idx, spec in ((RIGHT_EYE, RIGHT_IRIS, RIGHT_EAR), (LEFT_EYE, LEFT_IRIS, LEFT_EAR)):
+                  res = one_eye(lm, eye_idx, iris_idx, spec, luma, W, H, strength)
+                  if res is None:
+                      continue
+                  x0, y0, m = res
+                  full[y0:y0 + m.shape[0], x0:x0 + m.shape[1]] = np.maximum(full[y0:y0 + m.shape[0], x0:x0 + m.shape[1]], m)
+              return (np.clip(full, 0, 1) * 255.0 + 0.5).astype(np.uint8)
+
+          def make_fake_landmarks(cx_r, cy_r, cx_l, cy_l, r, half_w, half_h, openness=1.0):
+              """Géométrie synthétique (tests) : contour de l'oeil dans l'ordre réel des index MediaPipe."""
+              lm = np.zeros((478, 2), np.float32)
+              hh = half_h * max(openness, 0.02)
+              def eye(idx_list, iris_idx, cx, cy, outer_on_left):
+                  # idx_list : coin extérieur, paupière basse (7 pts), coin intérieur, paupière haute (7 pts, de l'intérieur vers l'extérieur)
+                  sgn = -1.0 if outer_on_left else 1.0
+                  lm[idx_list[0]] = [cx + sgn * half_w, cy]
+                  for k in range(7):                       # paupière basse
+                      t = (k + 1) / 8.0
+                      a = math.pi * t
+                      lm[idx_list[1 + k]] = [cx + sgn * half_w * math.cos(a), cy + hh * math.sin(a) * 0.95]
+                  lm[idx_list[8]] = [cx - sgn * half_w, cy]
+                  for k in range(7):                       # paupière haute
+                      t = (k + 1) / 8.0
+                      a = math.pi * t
+                      lm[idx_list[9 + k]] = [cx - sgn * half_w * math.cos(a), cy - hh * math.sin(a)]
+                  lm[iris_idx[0]] = [cx, cy]
+                  for j, ang in enumerate((0, 90, 180, 270)):
+                      lm[iris_idx[1 + j]] = [cx + r * math.cos(math.radians(ang)), cy + r * math.sin(math.radians(ang))]
+              eye(RIGHT_EYE, RIGHT_IRIS, cx_r, cy_r, True)
+              eye(LEFT_EYE, LEFT_IRIS, cx_l, cy_l, False)
+              return lm
+
+          # ====================== lecture / écriture des images, détecteur ======================
+          import os, sys, subprocess, argparse
+
+          TM = "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=mobius:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,"
+
+          def run_pipeline(src, out, W, H, fps, hdr, strength, detect, preview=None):
+              """Lit la vidéo (mêmes filtres que la composition), détecte les yeux, écrit un masque gris sans perte (une image par image)."""
+              vf = ("%sscale=%d:%d,setsar=1,fps=%s,format=rgb24" % (TM if hdr else "", W, H, fps))
+              cmd_in = ["ffmpeg", "-v", "error"] + (["-t", str(preview)] if preview else []) + ["-i", src, "-vf", vf, "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
+              cmd_out = ["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "gray", "-s", "%dx%d" % (W, H), "-r", str(fps), "-i", "-",
+                         "-c:v", "ffv1", "-pix_fmt", "gray", out]
+              pin = subprocess.Popen(cmd_in, stdout=subprocess.PIPE)
+              pout = subprocess.Popen(cmd_out, stdin=subprocess.PIPE)
+              fsize = W * H * 3
+              n = hits = 0
+              last_lm, hold = None, 0
+              f_num, f_den = (fps.split("/") + ["1"])[:2]
+              step_ms = 1000.0 * float(f_den) / float(f_num)
+              try:
+                  while True:
+                      buf = pin.stdout.read(fsize)
+                      if len(buf) < fsize:
+                          break
+                      frame = np.frombuffer(buf, np.uint8).reshape(H, W, 3)
+                      lm = None
+                      try:
+                          lm = detect(frame, int(n * step_ms))
+                      except Exception as e:                       # une image difficile ne doit jamais arrêter la vidéo
+                          lm = None
+                      weight = 1.0
+                      if lm is not None:
+                          last_lm, hold, hits = lm, 0, hits + 1
+                      elif last_lm is not None and hold < 1:       # trou de détection d'une seule image : on garde la position, atténuée
+                          lm, hold, weight = last_lm, hold + 1, 0.5
+                      if lm is None:
+                          mask = np.zeros((H, W), np.uint8)
+                      else:
+                          luma = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+                          mask = eyes_mask(lm, luma, W, H, strength * weight)
+                      pout.stdin.write(mask.tobytes())
+                      n += 1
+              finally:
+                  pout.stdin.close(); pout.wait(); pin.stdout.close(); pin.wait()
+              print("Yeux : %d images, visage détecté sur %d (%.0f %%)" % (n, hits, 100.0 * hits / max(n, 1)))
+              return n, hits
+
+          def mediapipe_detector(model_path, W, H):
+              import mediapipe as mp
+              from mediapipe.tasks import python as mpp
+              from mediapipe.tasks.python import vision
+              opts = vision.FaceLandmarkerOptions(
+                  base_options=mpp.BaseOptions(model_asset_path=model_path),
+                  running_mode=vision.RunningMode.VIDEO, num_faces=2,
+                  min_face_detection_confidence=0.4, min_face_presence_confidence=0.4, min_tracking_confidence=0.4)
+              lmk = vision.FaceLandmarker.create_from_options(opts)
+              def detect(frame, ts_ms):
+                  img = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(frame))
+                  res = lmk.detect_for_video(img, ts_ms)
+                  if not res.face_landmarks:
+                      return None
+                  best, best_area = None, -1.0
+                  for face in res.face_landmarks:                  # on garde le plus grand visage (le sujet)
+                      if len(face) < 478:
+                          continue
+                      pts = np.array([[p.x * W, p.y * H] for p in face], np.float32)
+                      area = float((pts[:, 0].max() - pts[:, 0].min()) * (pts[:, 1].max() - pts[:, 1].min()))
+                      if area > best_area:
+                          best, best_area = pts, area
+                  return best
+              return detect
+
+          def main():
+              ap = argparse.ArgumentParser()
+              ap.add_argument("--src"); ap.add_argument("--out"); ap.add_argument("--w", type=int); ap.add_argument("--h", type=int)
+              ap.add_argument("--fps"); ap.add_argument("--hdr", default="false"); ap.add_argument("--strength", type=float, default=0.8)
+              ap.add_argument("--model"); ap.add_argument("--preview", default="")
+              a = ap.parse_args()
+              detect = None
+              try:
+                  detect = mediapipe_detector(a.model, a.w, a.h)
+              except Exception as e:
+                  print("::warning::Détection des yeux indisponible (%s) : la vidéo sera produite sans changement des yeux." % str(e)[:200])
+              if detect is None:
+                  detect = lambda frame, ts: None
+              n, hits = run_pipeline(a.src, a.out, a.w, a.h, a.fps, a.hdr == "true", a.strength, detect, a.preview or None)
+              if n > 20 and hits < 0.2 * n:
+                  print("::warning::Visage détecté sur moins de 20 %% des images (%d/%d) : les yeux restent inchangés sur le reste de la vidéo." % (hits, n))
+
+          if __name__ == "__main__":
+              main()
+
+          PY
+          OW=${OWV:-1920}; OH=${OHV:-1080}; FPS=${FPSV:-30}
+          beauty-venv/bin/python beauty_eyes.py --src input/video.mp4 --out eyemask.mkv --w "$OW" --h "$OH" --fps "$FPS" \
+            --hdr "${HDR:-false}" --strength "$EYE_STR" --model face_landmarker.task --preview "$PREVIEW" \
+            || { echo "::warning::Le traitement des yeux a échoué : la vidéo sera produite sans changement des yeux."; rm -f eyemask.mkv; }
+          test -s eyemask.mkv && echo "Masque des yeux prêt." || echo "Pas de masque des yeux."
+
+      - name: Composer la vidéo (fond remplacé + peau + yeux)
+        env:
+          BGH: ${{ steps.files.outputs.bg }}
+          BGV: ${{ github.event.inputs.background_file_vertical }}
+          VERTICAL: ${{ steps.orient.outputs.vertical }}
+          OWV: ${{ steps.orient.outputs.out_w }}
+          OHV: ${{ steps.orient.outputs.out_h }}
+          FPSV: ${{ steps.orient.outputs.fps }}
+          HDR: ${{ steps.orient.outputs.hdr }}
+          PREVIEW: ${{ github.event.inputs.preview_seconds }}
+        run: |
+          mkdir -p output
+          if [ "$VERTICAL" = "true" ]; then
+            BG="input/${BGV:-background-vertical.jpg}"
+            test -f "$BG" || { echo "Image de fond verticale introuvable : $BG"; exit 1; }
+            OW=${OWV:-1080}; OH=${OHV:-1920}
+          else
+            BG="input/$BGH"
+            test -f "$BG" || { echo "Image de fond introuvable dans input/ : $BGH"; exit 1; }
+            OW=${OWV:-1920}; OH=${OHV:-1080}
+          fi
+          FPS=${FPSV:-30}
+          TM=""; [ "$HDR" = "true" ] && TM="zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=mobius:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,"
+
+          # Peau : masque de peau (couleur) adouci, puis version éclaircie et un peu moins rouge
+          SKIN_PART="[u0]copy[u1];"
+          if [ "$SKIN_ON" = "true" ] && [ -s skinmask.cube ]; then
+            C1=$(python3 -c "print(round(0.25+0.040*$SKIN_K,4))"); C2=$(python3 -c "print(round(0.5+0.075*$SKIN_K,4))"); C3=$(python3 -c "print(round(0.75+0.060*$SKIN_K,4))")
+            SAT=$(python3 -c "print(round(1-0.07*$SKIN_K,4))")
+            SKIN_PART="[u0]split=3[k0][k1][k2]; [k1]lut3d=file=skinmask.cube:interp=trilinear,format=gray,gblur=sigma=2.5[skm]; [k2]curves=all='0/0 0.25/$C1 0.5/$C2 0.75/$C3 1/1',colorbalance=rm=-0.03:bm=0.02,eq=saturation=$SAT[light]; [k0][light][skm]maskedmerge[u1];"
+          fi
+
+          # Yeux : version bleue (texture de l'iris conservée) appliquée seulement dans le masque des yeux
+          EYE_IN=()
+          EYE_PART="[u1]copy[u2];"
+          if [ "$EYES_ON" = "true" ] && [ -s eyemask.mkv ]; then
+            EYE_IN=(-i eyemask.mkv)
+            EYE_PART="[u1]split=2[e0][e1]; [e1]format=gray,format=gbrp,curves=all='0/0 0.1/0.20 0.2/0.34 0.4/0.58 1/1',colorchannelmixer=rr=0.52:gg=0.70:bb=0.95[blue]; [2:v]format=gray[em]; [e0][blue][em]maskedmerge[u2];"
+          fi
+
+          FILTER="
+            [1:v]scale=$OW:$OH:force_original_aspect_ratio=increase,crop=$OW:$OH,setsar=1[bg];
+            [0:v]${TM}scale=$OW:$OH,setsar=1,fps=$FPS,split=2[a][c];
+            [a]format=yuva420p,chromakey=0x$KEY_HEX:$KEY_SIM:0.06,alphaextract,erosion,erosion,erosion,boxblur=1:1[mat];
+            [c]format=gbrp,lut3d=file=unmix.cube:interp=tetrahedral[u0];
+            $SKIN_PART
+            $EYE_PART
+            [u2]format=rgba[cl];
+            [cl][mat]alphamerge[fg];
+            [bg][fg]overlay=shortest=1:format=auto[out]
+          "
+
+          PREV=(); [ -n "$PREVIEW" ] && PREV=(-t "$PREVIEW")
+          ffmpeg -y \
+            "${PREV[@]}" -i "input/video.mp4" \
+            -framerate "$FPS" -loop 1 -i "$BG" \
+            "${EYE_IN[@]}" \
+            -filter_complex "$FILTER" \
+            -map "[out]" -map 0:a? \
+            -c:v libx264 -preset slow -crf 17 -pix_fmt yuv420p \
+            -c:a aac -b:a 192k \
+            output/result.mp4
+
+      - name: Upload du résultat en artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-fond-remplace
+          path: output/result.mp4
+          retention-days: 14
+
+      - name: Publier le résultat comme Release (gère les gros fichiers)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="result-${{ github.run_number }}"
+          gh release create "$TAG" \
+            --repo "${{ github.repository }}" \
+            --title "Résultat run #${{ github.run_number }}" \
+            --notes "Vidéo fond remplacé, générée automatiquement." \
+            "output/result.mp4" || gh release upload "$TAG" "output/result.mp4" --repo "${{ github.repository }}" --clobber

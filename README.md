@@ -16,6 +16,7 @@ Les vidéos (volumineuses) passent par les **Releases GitHub** (jusqu'à environ
 | `.github/workflows/replace-background.yml` | Workflow principal (vidéos courtes, et aiguillage automatique) |
 | `.github/workflows/replace-background-long.yml` | Workflow des vidéos longues (lancé automatiquement, ou à la main) |
 | `.github/workflows/replace-background-assemble.yml` | Secours : recolle des morceaux déjà traités si l'étape finale a échoué |
+| `.github/workflows/replace-background-beauty.yml` | Même traitement + peau plus claire + yeux bleus (workflow séparé, optionnel) |
 | `input/background.jpg` | Image de fond pour les vidéos **horizontales** |
 | `input/background-vertical.jpg` | Image de fond pour les vidéos **verticales** |
 
@@ -122,6 +123,23 @@ Si la vidéo est dans une Release, renseigne `release_tag` et `video_asset` à l
 ### Google Drive : créer ton propre client_id
 
 Avec le `client_id` partagé de rclone, rclone affiche l'avertissement « This remote uses rclone's shared Google Drive client_id, which is being retired and will stop working during 2026 ». Pour éviter une coupure, crée ton propre client_id en suivant https://rclone.org/drive/#making-your-own-client-id, puis refais `rclone config` et remplace le secret `RCLONE_CONFIG`.
+
+## Beauté : peau plus claire et yeux bleus (workflow séparé)
+
+**Replace Green Screen Background + Beauté (peau et yeux)** fait exactement le même remplacement de fond que le workflow principal, puis applique deux retouches **uniquement sur toi** (le fond n'est jamais modifié). Les autres workflows ne sont pas touchés.
+
+| Champ | Rôle |
+|---|---|
+| `release_tag`, `video_asset`, `background_file`, `background_file_vertical`, `key_color` | Comme le workflow principal |
+| `skin_strength` | Peau plus claire : `0` = désactivé, `30` = discret (défaut), `50` = marqué |
+| `eye_strength` | Yeux bleus : `0` = désactivé, `80` = naturel (défaut), `100` = marqué |
+| `preview_seconds` | Test rapide : ne traiter que les N premières secondes (ex: `15`) |
+
+- **Peau** : elle est repérée par sa couleur (visage, cou, mains) : les cheveux, la barbe, les vêtements et le fond ne bougent pas. Elle est éclaircie et un peu moins rouge, en gardant les textures.
+- **Yeux** : un modèle de détection de visage (MediaPipe) suit l'iris image par image. Seul l'iris visible est coloré, la pupille et les reflets sont conservés, et l'effet disparaît quand la paupière se ferme (clignement) ou que l'œil se plisse. Si le visage n'est pas détecté sur une image, l'œil reste naturel.
+- **Premier essai** : lance d'abord avec `preview_seconds` à `15` pour contrôler le rendu des yeux sur ta vidéo avant de traiter la vidéo entière.
+- **Repli sûr** : si l'installation des outils de détection ou le téléchargement du modèle échoue, la vidéo est produite avec la peau seulement, avec un avertissement dans le log. Les yeux ne peuvent jamais bloquer la vidéo.
+- **Limites** : vidéos jusqu'à **25 minutes** (le traitement des yeux est plus lent) ; un seul visage est retouché (le plus grand) ; lunettes et fort maquillage non testés. Pour une vidéo plus longue, utilise le workflow standard.
 
 ## Dépannage
 

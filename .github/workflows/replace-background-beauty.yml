@@ -329,7 +329,8 @@ jobs:
               pupil = 1.0 - smoothstep(d, 0.30, 0.46)
               L = luma[y0:y1, x0:x1].astype(np.float32)
               limbal = 1.0 - smoothstep(d, 0.78, 1.02)     # bord de l'iris : on garde l'anneau sombre d'origine (rendu naturel)
-              m = shape * (1.0 - pupil) * limbal * smoothstep(L, 14, 30) * (1.0 - smoothstep(L, 200, 235))
+              # on ne colore que ce qui ressemble à un iris : ni très sombre (cils, pupille), ni très clair (reflets, peau éclairée, main)
+              m = shape * (1.0 - pupil) * limbal * smoothstep(L, 14, 30) * (1.0 - smoothstep(L, 125, 175))
               # clignement : la pondération disparaît avant la fermeture complète
               fade = float(smoothstep(np.array(ear(lm, ear_spec)), 0.10, 0.19))
               m *= fade * strength
@@ -337,11 +338,28 @@ jobs:
               m = cv2.GaussianBlur(m, (0, 0), sigma)
               return (x0, y0, m)
 
+          def eye_metrics(lm, iris_idx, ear_spec):
+              (a, b), _ = ear_spec
+              width = float(np.linalg.norm(lm[a] - lm[b]))
+              r = float(np.mean(np.linalg.norm(lm[iris_idx[1:]] - lm[iris_idx[0]], axis=1)))
+              return width, r
+
           def eyes_mask(lm, luma, W, H, strength=1.0):
-              """lm: (478,2) pixels ; renvoie uint8 (H,W)"""
+              """lm: (478,2) pixels ; renvoie uint8 (H,W).
+              De profil, l'oeil caché derrière le nez est beaucoup plus petit que l'autre : on l'éteint progressivement
+              (sinon une tache colorée apparaît sur la peau ou le nez)."""
+              specs = ((RIGHT_EYE, RIGHT_IRIS, RIGHT_EAR), (LEFT_EYE, LEFT_IRIS, LEFT_EAR))
+              mets = [eye_metrics(lm, s[1], s[2]) for s in specs]
+              weights = [1.0, 1.0]
+              big = 0 if mets[0][0] >= mets[1][0] else 1
+              far = 1 - big
+              ratio = min(mets[far][0] / max(mets[big][0], 1e-6), mets[far][1] / max(mets[big][1], 1e-6))
+              weights[far] = float(smoothstep(np.array(ratio), 0.50, 0.68))
               full = np.zeros((H, W), np.float32)
-              for eye_idx, iris_idx, spec in ((RIGHT_EYE, RIGHT_IRIS, RIGHT_EAR), (LEFT_EYE, LEFT_IRIS, LEFT_EAR)):
-                  res = one_eye(lm, eye_idx, iris_idx, spec, luma, W, H, strength)
+              for k, (eye_idx, iris_idx, spec) in enumerate(specs):
+                  if weights[k] <= 0.0:
+                      continue
+                  res = one_eye(lm, eye_idx, iris_idx, spec, luma, W, H, strength * weights[k])
                   if res is None:
                       continue
                   x0, y0, m = res
@@ -453,7 +471,7 @@ jobs:
               try:
                   detect = mediapipe_detector(a.model, a.w, a.h)
               except Exception as e:
-                  print("::warning::Détection des yeux indisponible (%s: %s) : la vidéo sera produite sans changement des yeux." % (type(e).__name__, str(e)[:400]))
+                  print("::warning::Détection des yeux indisponible (%s) : la vidéo sera produite sans changement des yeux." % str(e)[:200])
               if detect is None:
                   detect = lambda frame, ts: None
               n, hits = run_pipeline(a.src, a.out, a.w, a.h, a.fps, a.hdr == "true", a.strength, detect, a.preview or None)
@@ -464,7 +482,6 @@ jobs:
               main()
               sys.stdout.flush(); sys.stderr.flush()
               os._exit(0)      # évite un message d'erreur inoffensif de MediaPipe à la fermeture
-
           PY
           OW=${OWV:-1920}; OH=${OHV:-1080}; FPS=${FPSV:-30}
           beauty-venv/bin/python beauty_eyes.py --src input/video.mp4 --out eyemask.mkv --w "$OW" --h "$OH" --fps "$FPS" \

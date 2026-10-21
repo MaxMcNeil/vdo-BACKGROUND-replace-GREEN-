@@ -26,9 +26,9 @@ on:
         required: false
         default: 'background-vertical.jpg'
       skin_strength:
-        description: "Peau plus claire : 0 = désactivé, 30 = discret (défaut), 50 = marqué"
+        description: "Peau plus claire : 0 = désactivé, 25 = très discret, 50 = visible mais naturel (défaut), 70 = marqué"
         required: false
-        default: '30'
+        default: '50'
       eye_strength:
         description: "Yeux bleus : 0 = désactivé, 80 = naturel (défaut), 100 = marqué"
         required: false
@@ -229,7 +229,7 @@ jobs:
                   return min(max(float(os.environ.get(name, "") or default), 0.0), 100.0)
               except ValueError:
                   return float(default)
-          sk, ey = num("SKIN_STRENGTH", 30), num("EYE_STRENGTH", 80)
+          sk, ey = num("SKIN_STRENGTH", 50), num("EYE_STRENGTH", 80)
           N = 65
           def ramp(x, a, b): return min(max((x - a) / (b - a), 0.0), 1.0)
           def f(r, g, b):
@@ -259,6 +259,9 @@ jobs:
           HDR: ${{ steps.orient.outputs.hdr }}
           PREVIEW: ${{ github.event.inputs.preview_seconds }}
         run: |
+          # MediaPipe a besoin de bibliothèques graphiques système (absentes des serveurs GitHub par défaut)
+          sudo apt-get update -qq || true
+          sudo apt-get install -y --no-install-recommends libegl1 libgles2 libglib2.0-0 || echo "::warning::Installation des bibliothèques système impossible."
           python3 -m venv beauty-venv
           if ! beauty-venv/bin/pip install --quiet mediapipe opencv-python-headless numpy; then
             echo "::warning::Installation des outils de détection impossible : la vidéo sera produite sans changement des yeux."
@@ -268,6 +271,8 @@ jobs:
             echo "::warning::Modèle de détection des visages non téléchargeable : la vidéo sera produite sans changement des yeux."
             exit 0
           fi
+          SO=$(find beauty-venv -name "libmediapipe.so" | head -1)
+          if [ -n "$SO" ]; then ldd "$SO" | grep "not found" && echo "::warning::Bibliothèques système encore manquantes (liste ci-dessus)." || true; fi
           cat > beauty_eyes.py <<'PY'
           import numpy as np, cv2, math
 
@@ -444,7 +449,7 @@ jobs:
               try:
                   detect = mediapipe_detector(a.model, a.w, a.h)
               except Exception as e:
-                  print("::warning::Détection des yeux indisponible (%s) : la vidéo sera produite sans changement des yeux." % str(e)[:200])
+                  print("::warning::Détection des yeux indisponible (%s: %s) : la vidéo sera produite sans changement des yeux." % (type(e).__name__, str(e)[:400]))
               if detect is None:
                   detect = lambda frame, ts: None
               n, hits = run_pipeline(a.src, a.out, a.w, a.h, a.fps, a.hdr == "true", a.strength, detect, a.preview or None)

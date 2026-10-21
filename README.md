@@ -131,13 +131,14 @@ Avec le `client_id` partagé de rclone, rclone affiche l'avertissement « This r
 | Champ | Rôle |
 |---|---|
 | `release_tag`, `video_asset`, `background_file`, `background_file_vertical`, `key_color` | Comme le workflow principal |
-| `skin_strength` | Peau plus claire : `0` = désactivé, `30` = discret (défaut), `50` = marqué |
+| `skin_strength` | Peau plus claire : `0` = désactivé, `25` = très discret, `50` = visible mais naturel (défaut), `70` = marqué |
 | `eye_strength` | Yeux bleus : `0` = désactivé, `80` = naturel (défaut), `100` = marqué |
 | `preview_seconds` | Test rapide : ne traiter que les N premières secondes (ex: `15`) |
 
 - **Peau** : elle est repérée par sa couleur (visage, cou, mains) : les cheveux, la barbe, les vêtements et le fond ne bougent pas. Elle est éclaircie et un peu moins rouge, en gardant les textures.
 - **Yeux** : un modèle de détection de visage (MediaPipe) suit l'iris image par image. Seul l'iris visible est coloré, la pupille et les reflets sont conservés, et l'effet disparaît quand la paupière se ferme (clignement) ou que l'œil se plisse. Si le visage n'est pas détecté sur une image, l'œil reste naturel.
 - **Premier essai** : lance d'abord avec `preview_seconds` à `15` pour contrôler le rendu des yeux sur ta vidéo avant de traiter la vidéo entière.
+- **Dans le log** : l'étape « Détecter les yeux » affiche `Yeux : N images, visage détecté sur X (Y %)`. Si Y est proche de 0, les yeux n'ont pas été traités : le message d'avertissement juste au-dessus donne la cause exacte.
 - **Repli sûr** : si l'installation des outils de détection ou le téléchargement du modèle échoue, la vidéo est produite avec la peau seulement, avec un avertissement dans le log. Les yeux ne peuvent jamais bloquer la vidéo.
 - **Limites** : vidéos jusqu'à **25 minutes** (le traitement des yeux est plus lent) ; un seul visage est retouché (le plus grand) ; lunettes et fort maquillage non testés. Pour une vidéo plus longue, utilise le workflow standard.
 

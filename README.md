@@ -133,6 +133,7 @@ Avec le `client_id` partagé de rclone, rclone affiche l'avertissement « This r
 | `release_tag`, `video_asset`, `background_file`, `background_file_vertical`, `key_color` | Comme le workflow principal |
 | `skin_strength` | Peau plus claire : `0` = désactivé, `25` = très discret, `50` = visible mais naturel (défaut), `70` = marqué |
 | `eye_strength` | Yeux bleus : `0` = désactivé, `80` = naturel (défaut), `100` = marqué |
+| `eye_color` | `bleu_clair` (défaut), `bleu_intense` ou `vert` |
 | `preview_seconds` | Test rapide : ne traiter que les N premières secondes (ex: `15`) |
 
 - **Peau** : elle est repérée par sa couleur (visage, cou, mains) : les cheveux, la barbe, les vêtements et le fond ne bougent pas. Elle est éclaircie et un peu moins rouge, en gardant les textures.

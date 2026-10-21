@@ -33,6 +33,10 @@ on:
         description: "Yeux bleus : 0 = désactivé, 80 = naturel (défaut), 100 = marqué"
         required: false
         default: '80'
+      eye_color:
+        description: "Couleur des yeux : bleu_clair (défaut), bleu_intense ou vert"
+        required: false
+        default: 'bleu_clair'
       preview_seconds:
         description: "Test rapide : ne traiter que les N premières secondes (ex: 15). Vide = vidéo entière"
         required: false
@@ -458,6 +462,8 @@ jobs:
 
           if __name__ == "__main__":
               main()
+              sys.stdout.flush(); sys.stderr.flush()
+              os._exit(0)      # évite un message d'erreur inoffensif de MediaPipe à la fermeture
 
           PY
           OW=${OWV:-1920}; OH=${OHV:-1080}; FPS=${FPSV:-30}
@@ -476,6 +482,7 @@ jobs:
           FPSV: ${{ steps.orient.outputs.fps }}
           HDR: ${{ steps.orient.outputs.hdr }}
           PREVIEW: ${{ github.event.inputs.preview_seconds }}
+          EYE_COLOR: ${{ github.event.inputs.eye_color }}
         run: |
           mkdir -p output
           if [ "$VERTICAL" = "true" ]; then
@@ -499,11 +506,16 @@ jobs:
           fi
 
           # Yeux : version bleue (texture de l'iris conservée) appliquée seulement dans le masque des yeux
+          case "$EYE_COLOR" in
+            vert)           EYE_CURVE="0/0 0.1/0.26 0.2/0.44 0.4/0.68 1/1"; EYE_MIX="rr=0.62:gg=0.78:bb=0.52";;
+            bleu_intense)   EYE_CURVE="0/0 0.08/0.36 0.2/0.60 0.4/0.82 1/1"; EYE_MIX="rr=0.70:gg=0.86:bb=1.0";;
+            *)              EYE_CURVE="0/0 0.1/0.30 0.2/0.50 0.4/0.74 1/1"; EYE_MIX="rr=0.64:gg=0.82:bb=1.0";;
+          esac
           EYE_IN=()
           EYE_PART="[u1]copy[u2];"
           if [ "$EYES_ON" = "true" ] && [ -s eyemask.mkv ]; then
             EYE_IN=(-i eyemask.mkv)
-            EYE_PART="[u1]split=2[e0][e1]; [e1]format=gray,format=gbrp,curves=all='0/0 0.1/0.20 0.2/0.34 0.4/0.58 1/1',colorchannelmixer=rr=0.52:gg=0.70:bb=0.95[blue]; [2:v]format=gray[em]; [e0][blue][em]maskedmerge[u2];"
+            EYE_PART="[u1]split=2[e0][e1]; [e1]format=gray,format=gbrp,curves=all='$EYE_CURVE',colorchannelmixer=$EYE_MIX[blue]; [2:v]format=gray[em]; [e0][blue][em]maskedmerge[u2];"
           fi
 
           FILTER="

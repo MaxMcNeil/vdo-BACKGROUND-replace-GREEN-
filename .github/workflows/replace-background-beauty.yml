@@ -1,577 +1,360 @@
 name: Replace Green Screen Background + Beauté (peau et yeux)
 
+# Même remplacement du fond vert que les autres workflows, puis, uniquement sur toi :
+#  - peau plus claire (visage, cou, mains, bras), repérée par un modèle de segmentation (vêtements, cheveux, barbe et fond exclus)
+#  - yeux recolorés (bleu clair naturel par défaut) : iris suivi image par image, pupille / reflets / paupières intacts
+#  - nettoyage des bords : mur ou plafond visibles autour du tissu vert remplacés par le fond
+# Vidéo prise dans une Release, sur Google Drive (lien ou rclone) ou via un lien direct.
+# Toute durée : la vidéo est découpée en morceaux traités en parallèle, puis recollée.
+
 permissions:
   contents: write
+  actions: write
 
 on:
-  # Lancement manuel : tu précises le tag de la Release qui contient la vidéo
   workflow_dispatch:
     inputs:
-      release_tag:
-        description: 'Tag de la Release contenant la vidéo (ex: v1)'
-        required: true
-      video_asset:
-        description: "Nom du fichier vidéo attaché à cette Release (ex: video.mp4)"
-        required: true
-      background_file:
-        description: 'Nom du fichier image de fond dans input/ (ex: background.jpg)'
-        required: false
-        default: 'background.jpg'
-      key_color:
-        description: 'Couleur du fond vert en hex (ex: 139D74). Laisser vide = mesure automatique'
+      source:
+        description: "Vidéo : lien Google Drive / Dropbox / lien direct (https://...), ou chemin rclone (ex: gdrive:videos/ma_video.mp4). Vide = Release ci-dessous"
         required: false
         default: ''
-      background_file_vertical:
-        description: 'Image de fond pour les vidéos VERTICALES, dans input/ (ex: background-vertical.jpg)'
+      release_tag:
+        description: 'Tag de la Release contenant la vidéo (ex: v1). Vide = dernière Release contenant une vidéo'
         required: false
-        default: 'background-vertical.jpg'
+        default: ''
+      video_asset:
+        description: "Nom du fichier vidéo dans cette Release (ex: video.mp4). Vide = la vidéo la plus récente de la Release"
+        required: false
+        default: ''
       skin_strength:
-        description: "Peau plus claire : 0 = désactivé, 25 = très discret, 50 = visible mais naturel (défaut), 70 = marqué"
+        description: "Peau plus claire : 0 = désactivé, 30 = discret, 60 = nettement plus claire (défaut), 90 = très claire"
         required: false
-        default: '50'
+        default: '60'
       eye_strength:
-        description: "Yeux bleus : 0 = désactivé, 80 = naturel (défaut), 100 = marqué"
+        description: "Yeux : 0 = désactivé, 80 = naturel (défaut), 100 = maximum"
         required: false
         default: '80'
       eye_color:
-        description: "Couleur des yeux : bleu_clair (défaut), bleu_intense ou vert"
+        description: 'Couleur des yeux'
         required: false
-        default: 'bleu_clair'
+        type: choice
+        default: bleu_clair
+        options: [bleu_clair, gris_bleu, bleu_intense, vert]
+      clean_edges:
+        description: 'Remplacer aussi le mur / plafond visibles autour du tissu vert'
+        required: false
+        type: boolean
+        default: true
       preview_seconds:
         description: "Test rapide : ne traiter que les N premières secondes (ex: 15). Vide = vidéo entière"
         required: false
         default: ''
+      background_file:
+        description: 'Image de fond pour les vidéos horizontales, dans input/ (ex: background.jpg)'
+        required: false
+        default: 'background.jpg'
+      background_file_vertical:
+        description: 'Image de fond pour les vidéos VERTICALES, dans input/ (ex: background-vertical.jpg)'
+        required: false
+        default: 'background-vertical.jpg'
+      key_color:
+        description: 'Couleur du fond vert en hex (ex: 139D74). Vide = mesure automatique'
+        required: false
+        default: ''
+      dest:
+        description: 'Dossier rclone où envoyer AUSSI le résultat (ex: gdrive:resultats). Vide = variable RCLONE_DEST si la source vient de rclone ou si le fichier dépasse 2 Go'
+        required: false
+        default: ''
+      chunk_minutes:
+        description: 'Durée de chaque morceau traité en parallèle, en minutes. Vide = automatique'
+        required: false
+        default: ''
 
 jobs:
-  replace-background:
+  prepare:
+    name: Préparer (source, mesure du fond, découpage)
     runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      n_chunks: ${{ steps.plan.outputs.n_chunks }}
+      key: ${{ steps.plan.outputs.key }}
+      fps: ${{ steps.plan.outputs.fps }}
+      has_audio: ${{ steps.plan.outputs.has_audio }}
+      vertical: ${{ steps.plan.outputs.vertical }}
+      out_w: ${{ steps.plan.outputs.out_w }}
+      out_h: ${{ steps.plan.outputs.out_h }}
+      hdr: ${{ steps.plan.outputs.hdr }}
+      out_name: ${{ steps.plan.outputs.out_name }}
+      mode: ${{ steps.src.outputs.mode }}
+      release_tag: ${{ steps.src.outputs.release_tag }}
+      video_asset: ${{ steps.src.outputs.video_asset }}
+      bg: ${{ steps.plan.outputs.bg }}
     steps:
       - name: Checkout du repo
         uses: actions/checkout@v4
 
-      - name: Installer FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
-
-      - name: Préparer les noms de fichiers
-        id: files
+      - name: Installer FFmpeg (et rclone si besoin)
         env:
-          BGFILE: ${{ github.event.inputs.background_file }}
+          SOURCE: ${{ github.event.inputs.source }}
+          HAS_RCLONE: ${{ secrets.RCLONE_CONFIG != '' }}
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
         run: |
-          BG="${BGFILE:-background.jpg}"
-          echo "bg=$BG" >> "$GITHUB_OUTPUT"
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          if [ "$HAS_RCLONE" = "true" ]; then
+            (curl -fsSL https://rclone.org/install.sh | sudo bash) || sudo apt-get install -y -qq rclone
+            mkdir -p ~/.config/rclone && printf '%s\n' "$RCLONE_CONFIG_CONTENT" > ~/.config/rclone/rclone.conf
+          fi
 
-      - name: Télécharger la vidéo depuis la Release
+      - name: Accéder à la vidéo source
+        id: src
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RTAG: ${{ github.event.inputs.release_tag }}
-          RASSET: ${{ github.event.inputs.video_asset }}
-        run: |
-          mkdir -p input
-          gh release download "$RTAG" \
-            --repo "${{ github.repository }}" \
-            --pattern "$RASSET" \
-            --output "input/video.mp4" \
-            --clobber
+          REPO: ${{ github.repository }}
+          SOURCE: ${{ github.event.inputs.source }}
+          RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+          VIDEO_ASSET: ${{ github.event.inputs.video_asset }}
+        run: bash scripts/get_source.sh resolve
 
-      - name: Vérifier que les fichiers existent
-        run: |
-          test -f "input/video.mp4" || (echo "Vidéo introuvable — vérifie le tag/nom d'asset de la Release" && exit 1)
+      - name: Garder la vidéo téléchargée pour les morceaux (lien direct / Google Drive)
+        if: steps.src.outputs.mode == 'url'
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-video
+          path: input/video.mp4
+          retention-days: 1
+          compression-level: 0
 
-      - name: Vérifier la durée (limite de ce workflow)
-        env:
-          PREVIEW: ${{ github.event.inputs.preview_seconds }}
-        run: |
-          DUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "input/video.mp4")
-          echo "Durée de la vidéo : ${DUR}s"
-          if [ -z "$PREVIEW" ] && python3 -c "import sys; sys.exit(0 if float('$DUR') > 25*60 else 1)" 2>/dev/null; then
-            echo "::error::Ce workflow (peau + yeux) traite des vidéos jusqu'à 25 minutes : le traitement des yeux image par image est plus lent. Pour une vidéo plus longue, utilise le workflow standard, ou découpe la vidéo."
-            exit 1
-          fi
-
-      - name: Détecter l'orientation de la vidéo (horizontale / verticale)
-        id: orient
-        continue-on-error: true
-        env:
-          VIDEO_PATH: input/video.mp4
-        run: |
-          python3 - <<'PY'
-          import json, os, subprocess
-          src = os.environ.get("VIDEO_PATH") or os.environ["SRC"]
-          j = json.loads(subprocess.check_output(["ffprobe", "-v", "error", "-select_streams", "v:0",
-              "-show_entries", "stream=width,height,color_transfer,avg_frame_rate,r_frame_rate:stream_side_data=rotation",
-              "-of", "json", src]))
-          s = j["streams"][0]
-          w, h = int(s["width"]), int(s["height"])
-          rot = 0
-          for sd in s.get("side_data_list", []):
-              if "rotation" in sd:
-                  rot = int(round(float(sd["rotation"])))
-          if abs(rot) % 180 == 90:      # vidéo tournée par métadonnée (téléphone) : on inverse
-              w, h = h, w
-          vertical = h > w
-          if not vertical and abs(w / float(h) - 16 / 9.0) < 0.012:
-              ow, oh = 1920, 1080       # 16:9 : sortie standard, comme avant
-          else:
-              k = min(1.0, 1920.0 / max(w, h))
-              ow, oh = int(round(w * k / 2.0)) * 2, int(round(h * k / 2.0)) * 2
-          hdr = s.get("color_transfer") in ("smpte2084", "arib-std-b67")
-
-          def to_rate(t):
-              try:
-                  a, b = [float(x) for x in t.split("/")] if "/" in t else (float(t), 1.0)
-                  return a / b if b else 0.0
-              except Exception:
-                  return 0.0
-          rate = to_rate(s.get("avg_frame_rate", ""))
-          if not 5.0 <= rate <= 120.0:
-              alt = to_rate(s.get("r_frame_rate", ""))
-              rate = alt if 5.0 <= alt <= 120.0 else 30.0
-          std = {"24000/1001": 23.976, "24": 24.0, "25": 25.0, "30000/1001": 29.97, "30": 30.0, "50": 50.0, "60000/1001": 59.94, "60": 60.0}
-          best = min(std.items(), key=lambda kv: abs(kv[1] - rate))
-          fps = best[0] if abs(best[1] - rate) / rate < 0.01 else "%.3f" % rate
-
-          print("Vidéo %dx%d -> %s, sortie %dx%d, %s i/s%s" % (w, h, "VERTICALE" if vertical else "horizontale", ow, oh, fps, ", HDR (conversion SDR)" if hdr else ""))
-          with open(os.environ["GITHUB_OUTPUT"], "a") as o:
-              o.write("vertical=%s\nout_w=%d\nout_h=%d\nhdr=%s\nfps=%s\n" % ("true" if vertical else "false", ow, oh, "true" if hdr else "false", fps))
-          PY
-
-      - name: Analyser le fond vert (couleur, tolérance, seuil)
+      - name: Analyser la vidéo (orientation, couleur du fond, découpage)
+        id: plan
         env:
           KEY_OVERRIDE: ${{ github.event.inputs.key_color }}
-          HDR: ${{ steps.orient.outputs.hdr }}
-        run: |
-          cat > analyze.py <<'PY'
-          import os, math, subprocess, statistics as st
-          VIDEO = "input/video.mp4"
-          W, H, N = 192, 108, 12
-          TM = "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=mobius:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p," if os.environ.get("HDR") == "true" else ""
-          dur = float(subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", VIDEO]).decode().strip())
-          raw = subprocess.check_output(["ffmpeg", "-v", "error", "-i", VIDEO, "-vf", "fps=%.4f," % (N / dur) + TM + "scale=%d:%d:flags=area,format=rgb24" % (W, H), "-frames:v", str(N), "-f", "rawvideo", "-"])
-          fs = W * H * 3
-          frames = [raw[i * fs:(i + 1) * fs] for i in range(len(raw) // fs)]
-
-          def exg(p): return p[1] - (p[0] + p[2]) / 2
-          def uvmag(r, g, b):
-              u = -0.169 * r - 0.331 * g + 0.5 * b
-              v = 0.5 * r - 0.419 * g - 0.081 * b
-              return math.hypot(u, v)
-
-          override = os.environ.get("KEY_OVERRIDE", "").strip().lstrip("#").upper()
-          if len(override) == 6:
-              R, G, B = [int(override[i:i + 2], 16) for i in (0, 2, 4)]
-              print("Couleur imposée manuellement :", override)
-          else:
-              # Bords supposés libres : bandeau du haut + colonnes gauche/droite (haut de l'image)
-              px = []
-              for f in frames:
-                  for y in range(H):
-                      for x in range(W):
-                          if y < H * 0.15 or ((x < W * 0.06 or x >= W * 0.94) and y < H * 0.60):
-                              i = (y * W + x) * 3
-                              px.append((f[i], f[i + 1], f[i + 2]))
-              m = [st.median(p[i] for p in px) for i in range(3)]
-              good = [p for p in px if abs(exg(p) - exg(m)) < 40 and p[1] > p[0] and p[1] > p[2]]
-              if len(good) < 0.3 * len(px):
-                  raise SystemExit("Mesure du fond vert peu fiable : relance avec key_color renseigné")
-              R, G, B = [st.median(p[i] for p in good) for i in range(3)]
-              R, G, B = round(R), round(G), round(B)
-
-          EK = max(G - (R + B) / 2, 20.0)
-          # Référence calibrée sur le tissu d'origine (#139D74 -> tolérance 0.10, seuil 100)
-          ref = uvmag(19, 157, 116)
-          SIM = min(max(0.10 * uvmag(R, G, B) / ref, 0.05), 0.16)
-          lum = (R + G + B) / 3
-          THR = min(max(100 * lum / 98.0, 70.0), 150.0)
-          hexk = "%02X%02X%02X" % (R, G, B)
-          print("Fond : #%s  EK=%.1f  tolérance=%.3f  seuil=%.1f" % (hexk, EK, SIM, THR))
-          with open(os.environ["GITHUB_ENV"], "a") as e:
-              e.write("KEY_HEX=%s\nKEY_R=%d\nKEY_G=%d\nKEY_B=%d\nKEY_EK=%.2f\nKEY_SIM=%.3f\nKEY_THR=%.1f\n" % (hexk, R, G, B, EK, SIM, THR))
-          PY
-          python3 analyze.py
-
-      - name: Générer la table de couleurs (dé-mélange du vert)
-        run: |
-          # Pour chaque couleur RGB possible : estime la part de fond vert dans le pixel,
-          # reconstruit la vraie couleur du sujet (surtout utile sur les doigts flous),
-          # puis plafonne le vert/bleu résiduel. Pixels sombres (cheveux) préservés.
-          cat > mklut.py <<'PY'
-          import os
-          N = 65
-          K = (float(os.environ["KEY_R"]), float(os.environ["KEY_G"]), float(os.environ["KEY_B"]))
-          EK = float(os.environ["KEY_EK"])
-          THR = float(os.environ["KEY_THR"])
-          def f(r, g, b):
-              a = 1 - max(g - (r + b) / 2, 0) / EK
-              a = min(max(a, 0.4), 1.0)
-              if (r + g + b) / 3 > THR:
-                  r = min(max((r - (1 - a) * K[0]) / a, 0), 255)
-                  g = min(max((g - (1 - a) * K[1]) / a, 0), 255)
-                  b = min(max((b - (1 - a) * K[2]) / a, 0), 255)
-              g = min(g, (r + b) / 2)
-              b = min(b, r)
-              return r, g, b
-          with open("unmix.cube", "w") as o:
-              o.write('TITLE "unmix"\nLUT_3D_SIZE %d\n' % N)
-              for bi in range(N):
-                  for gi in range(N):
-                      for ri in range(N):
-                          r, g, b = f(ri * 255 / (N - 1), gi * 255 / (N - 1), bi * 255 / (N - 1))
-                          o.write("%.5f %.5f %.5f\n" % (r / 255, g / 255, b / 255))
-          PY
-          python3 mklut.py
-          test -s unmix.cube
-
-      - name: Préparer les effets (peau, force des yeux)
-        env:
-          SKIN_STRENGTH: ${{ github.event.inputs.skin_strength }}
-          EYE_STRENGTH: ${{ github.event.inputs.eye_strength }}
-        run: |
-          python3 - <<'PY'
-          import os
-          def num(name, default):
-              try:
-                  return min(max(float(os.environ.get(name, "") or default), 0.0), 100.0)
-              except ValueError:
-                  return float(default)
-          sk, ey = num("SKIN_STRENGTH", 50), num("EYE_STRENGTH", 80)
-          N = 65
-          def ramp(x, a, b): return min(max((x - a) / (b - a), 0.0), 1.0)
-          def f(r, g, b):
-              y = 0.299*r + 0.587*g + 0.114*b
-              cb = 128 - 0.168736*r - 0.331264*g + 0.5*b
-              cr = 128 + 0.5*r - 0.418688*g - 0.081312*b
-              m = ramp(cb, 71, 83) * (1 - ramp(cb, 121, 133)) * ramp(cr, 127, 139) * (1 - ramp(cr, 167, 179)) * ramp(y, 35, 75) * (1 - ramp(y, 235, 252))
-              return m * (1 - ramp(g - (r + b) / 2, 10, 30))      # pas de peau là où il reste du vert de fond
-          if sk > 0:
-              with open("skinmask.cube", "w") as o:
-                  o.write('TITLE "skin"\nLUT_3D_SIZE %d\n' % N)
-                  for bi in range(N):
-                      for gi in range(N):
-                          for ri in range(N):
-                              v = f(ri*255/(N-1), gi*255/(N-1), bi*255/(N-1)); o.write("%.5f %.5f %.5f\n" % (v, v, v))
-          with open(os.environ["GITHUB_ENV"], "a") as e:
-              e.write("SKIN_ON=%s\nSKIN_K=%.3f\nEYES_ON=%s\nEYE_STR=%.3f\n" % ("true" if sk > 0 else "false", sk / 50.0, "true" if ey > 0 else "false", ey / 100.0))
-          print("Peau : force %.0f | Yeux : force %.0f" % (sk, ey))
-          PY
-
-      - name: Détecter les yeux (masque image par image)
-        if: env.EYES_ON == 'true'
-        env:
-          OWV: ${{ steps.orient.outputs.out_w }}
-          OHV: ${{ steps.orient.outputs.out_h }}
-          FPSV: ${{ steps.orient.outputs.fps }}
-          HDR: ${{ steps.orient.outputs.hdr }}
           PREVIEW: ${{ github.event.inputs.preview_seconds }}
-        run: |
-          # MediaPipe a besoin de bibliothèques graphiques système (absentes des serveurs GitHub par défaut)
-          sudo apt-get update -qq || true
-          sudo apt-get install -y --no-install-recommends libegl1 libgles2 libglib2.0-0 || echo "::warning::Installation des bibliothèques système impossible."
-          python3 -m venv beauty-venv
-          if ! beauty-venv/bin/pip install --quiet mediapipe opencv-python-headless numpy; then
-            echo "::warning::Installation des outils de détection impossible : la vidéo sera produite sans changement des yeux."
-            exit 0
-          fi
-          if ! curl -fsSL --retry 3 --retry-delay 3 -o face_landmarker.task "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"; then
-            echo "::warning::Modèle de détection des visages non téléchargeable : la vidéo sera produite sans changement des yeux."
-            exit 0
-          fi
-          SO=$(find beauty-venv -name "libmediapipe.so" | head -1)
-          if [ -n "$SO" ]; then ldd "$SO" | grep "not found" && echo "::warning::Bibliothèques système encore manquantes (liste ci-dessus)." || true; fi
-          cat > beauty_eyes.py <<'PY'
-          import numpy as np, cv2, math
-
-          # indices MediaPipe FaceLandmarker (478 points, iris inclus)
-          RIGHT_EYE  = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246]   # œil droit du sujet (à gauche de l'image)
-          LEFT_EYE   = [263, 249, 390, 373, 374, 380, 381, 382, 362, 398, 384, 385, 386, 387, 388, 466]
-          RIGHT_IRIS = [468, 469, 470, 471, 472]
-          LEFT_IRIS  = [473, 474, 475, 476, 477]
-          SS = 4   # suréchantillonnage pour des bords propres
-
-          def smoothstep(x, a, b):
-              t = np.clip((x - a) / float(b - a), 0.0, 1.0)
-              return t * t * (3 - 2 * t)
-
-          RIGHT_EAR = ((33, 133), [(160, 144), (159, 145), (158, 153)])
-          LEFT_EAR  = ((362, 263), [(387, 373), (386, 374), (385, 380)])
-
-          def ear(lm, spec):
-              (a, b), pairs = spec
-              width = float(np.linalg.norm(lm[a] - lm[b]))
-              if width < 1e-3:
-                  return 0.0
-              return float(np.mean([np.linalg.norm(lm[u] - lm[v]) for u, v in pairs]) / width)
-
-          def one_eye(lm, eye_idx, iris_idx, ear_spec, luma, W, H, strength):
-              """Masque (float 0..1, taille image) de l'iris visible d'un oeil. lm : (478,2) en pixels."""
-              c = lm[iris_idx[0]]
-              ring = lm[iris_idx[1:]]
-              r = float(np.mean(np.linalg.norm(ring - c, axis=1)))
-              if not np.isfinite(r) or r < 2.0 or r > 0.2 * max(W, H):
-                  return None
-              pts = lm[eye_idx]
-              x0 = int(max(0, math.floor(min(pts[:, 0].min(), c[0] - r) - 4))); x1 = int(min(W, math.ceil(max(pts[:, 0].max(), c[0] + r) + 4)))
-              y0 = int(max(0, math.floor(min(pts[:, 1].min(), c[1] - r) - 4))); y1 = int(min(H, math.ceil(max(pts[:, 1].max(), c[1] + r) + 4)))
-              if x1 - x0 < 6 or y1 - y0 < 4:
-                  return None
-              w, h = x1 - x0, y1 - y0
-              # forme : disque de l'iris ∩ ouverture de la paupière (le clignement la referme tout seul)
-              big_disk = np.zeros((h * SS, w * SS), np.uint8)
-              cv2.circle(big_disk, (int(round((c[0] - x0) * SS)), int(round((c[1] - y0) * SS))), int(round(r * 1.02 * SS)), 255, -1, cv2.LINE_AA)
-              big_lid = np.zeros((h * SS, w * SS), np.uint8)
-              poly = ((pts - [x0, y0]) * SS).round().astype(np.int32)
-              cv2.fillPoly(big_lid, [poly], 255, cv2.LINE_AA)
-              k = max(1, int(round(SS * 0.8)))              # on rentre un peu sous le bord de la paupière (cils, ombre)
-              big_lid = cv2.erode(big_lid, np.ones((k, k), np.uint8))
-              shape = cv2.resize(cv2.bitwise_and(big_disk, big_lid), (w, h), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
-              # pupille protégée (géométrique) + pixels très sombres (cils) + reflets blancs
-              yy, xx = np.mgrid[y0:y1, x0:x1].astype(np.float32)
-              d = np.hypot(xx + 0.5 - c[0], yy + 0.5 - c[1]) / r
-              pupil = 1.0 - smoothstep(d, 0.30, 0.46)
-              L = luma[y0:y1, x0:x1].astype(np.float32)
-              limbal = 1.0 - smoothstep(d, 0.78, 1.02)     # bord de l'iris : on garde l'anneau sombre d'origine (rendu naturel)
-              # on ne colore que ce qui ressemble à un iris : ni très sombre (cils, pupille), ni très clair (reflets, peau éclairée, main)
-              m = shape * (1.0 - pupil) * limbal * smoothstep(L, 14, 30) * (1.0 - smoothstep(L, 125, 175))
-              # clignement : la pondération disparaît avant la fermeture complète
-              fade = float(smoothstep(np.array(ear(lm, ear_spec)), 0.10, 0.19))
-              m *= fade * strength
-              sigma = max(0.6, r * 0.10)
-              m = cv2.GaussianBlur(m, (0, 0), sigma)
-              return (x0, y0, m)
-
-          def eye_metrics(lm, iris_idx, ear_spec):
-              (a, b), _ = ear_spec
-              width = float(np.linalg.norm(lm[a] - lm[b]))
-              r = float(np.mean(np.linalg.norm(lm[iris_idx[1:]] - lm[iris_idx[0]], axis=1)))
-              return width, r
-
-          def eyes_mask(lm, luma, W, H, strength=1.0):
-              """lm: (478,2) pixels ; renvoie uint8 (H,W).
-              De profil, l'oeil caché derrière le nez est beaucoup plus petit que l'autre : on l'éteint progressivement
-              (sinon une tache colorée apparaît sur la peau ou le nez)."""
-              specs = ((RIGHT_EYE, RIGHT_IRIS, RIGHT_EAR), (LEFT_EYE, LEFT_IRIS, LEFT_EAR))
-              mets = [eye_metrics(lm, s[1], s[2]) for s in specs]
-              weights = [1.0, 1.0]
-              big = 0 if mets[0][0] >= mets[1][0] else 1
-              far = 1 - big
-              ratio = min(mets[far][0] / max(mets[big][0], 1e-6), mets[far][1] / max(mets[big][1], 1e-6))
-              weights[far] = float(smoothstep(np.array(ratio), 0.50, 0.68))
-              full = np.zeros((H, W), np.float32)
-              for k, (eye_idx, iris_idx, spec) in enumerate(specs):
-                  if weights[k] <= 0.0:
-                      continue
-                  res = one_eye(lm, eye_idx, iris_idx, spec, luma, W, H, strength * weights[k])
-                  if res is None:
-                      continue
-                  x0, y0, m = res
-                  full[y0:y0 + m.shape[0], x0:x0 + m.shape[1]] = np.maximum(full[y0:y0 + m.shape[0], x0:x0 + m.shape[1]], m)
-              return (np.clip(full, 0, 1) * 255.0 + 0.5).astype(np.uint8)
-
-          def make_fake_landmarks(cx_r, cy_r, cx_l, cy_l, r, half_w, half_h, openness=1.0):
-              """Géométrie synthétique (tests) : contour de l'oeil dans l'ordre réel des index MediaPipe."""
-              lm = np.zeros((478, 2), np.float32)
-              hh = half_h * max(openness, 0.02)
-              def eye(idx_list, iris_idx, cx, cy, outer_on_left):
-                  # idx_list : coin extérieur, paupière basse (7 pts), coin intérieur, paupière haute (7 pts, de l'intérieur vers l'extérieur)
-                  sgn = -1.0 if outer_on_left else 1.0
-                  lm[idx_list[0]] = [cx + sgn * half_w, cy]
-                  for k in range(7):                       # paupière basse
-                      t = (k + 1) / 8.0
-                      a = math.pi * t
-                      lm[idx_list[1 + k]] = [cx + sgn * half_w * math.cos(a), cy + hh * math.sin(a) * 0.95]
-                  lm[idx_list[8]] = [cx - sgn * half_w, cy]
-                  for k in range(7):                       # paupière haute
-                      t = (k + 1) / 8.0
-                      a = math.pi * t
-                      lm[idx_list[9 + k]] = [cx - sgn * half_w * math.cos(a), cy - hh * math.sin(a)]
-                  lm[iris_idx[0]] = [cx, cy]
-                  for j, ang in enumerate((0, 90, 180, 270)):
-                      lm[iris_idx[1 + j]] = [cx + r * math.cos(math.radians(ang)), cy + r * math.sin(math.radians(ang))]
-              eye(RIGHT_EYE, RIGHT_IRIS, cx_r, cy_r, True)
-              eye(LEFT_EYE, LEFT_IRIS, cx_l, cy_l, False)
-              return lm
-
-          # ====================== lecture / écriture des images, détecteur ======================
-          import os, sys, subprocess, argparse
-
-          TM = "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=mobius:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,"
-
-          def run_pipeline(src, out, W, H, fps, hdr, strength, detect, preview=None):
-              """Lit la vidéo (mêmes filtres que la composition), détecte les yeux, écrit un masque gris sans perte (une image par image)."""
-              vf = ("%sscale=%d:%d,setsar=1,fps=%s,format=rgb24" % (TM if hdr else "", W, H, fps))
-              cmd_in = ["ffmpeg", "-v", "error"] + (["-t", str(preview)] if preview else []) + ["-i", src, "-vf", vf, "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
-              cmd_out = ["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "gray", "-s", "%dx%d" % (W, H), "-r", str(fps), "-i", "-",
-                         "-c:v", "ffv1", "-pix_fmt", "gray", out]
-              pin = subprocess.Popen(cmd_in, stdout=subprocess.PIPE)
-              pout = subprocess.Popen(cmd_out, stdin=subprocess.PIPE)
-              fsize = W * H * 3
-              n = hits = 0
-              last_lm, hold = None, 0
-              f_num, f_den = (fps.split("/") + ["1"])[:2]
-              step_ms = 1000.0 * float(f_den) / float(f_num)
-              try:
-                  while True:
-                      buf = pin.stdout.read(fsize)
-                      if len(buf) < fsize:
-                          break
-                      frame = np.frombuffer(buf, np.uint8).reshape(H, W, 3)
-                      lm = None
-                      try:
-                          lm = detect(frame, int(n * step_ms))
-                      except Exception as e:                       # une image difficile ne doit jamais arrêter la vidéo
-                          lm = None
-                      weight = 1.0
-                      if lm is not None:
-                          last_lm, hold, hits = lm, 0, hits + 1
-                      elif last_lm is not None and hold < 1:       # trou de détection d'une seule image : on garde la position, atténuée
-                          lm, hold, weight = last_lm, hold + 1, 0.5
-                      if lm is None:
-                          mask = np.zeros((H, W), np.uint8)
-                      else:
-                          luma = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-                          mask = eyes_mask(lm, luma, W, H, strength * weight)
-                      pout.stdin.write(mask.tobytes())
-                      n += 1
-              finally:
-                  pout.stdin.close(); pout.wait(); pin.stdout.close(); pin.wait()
-              print("Yeux : %d images, visage détecté sur %d (%.0f %%)" % (n, hits, 100.0 * hits / max(n, 1)))
-              return n, hits
-
-          def mediapipe_detector(model_path, W, H):
-              import mediapipe as mp
-              from mediapipe.tasks import python as mpp
-              from mediapipe.tasks.python import vision
-              opts = vision.FaceLandmarkerOptions(
-                  base_options=mpp.BaseOptions(model_asset_path=model_path),
-                  running_mode=vision.RunningMode.VIDEO, num_faces=2,
-                  min_face_detection_confidence=0.4, min_face_presence_confidence=0.4, min_tracking_confidence=0.4)
-              lmk = vision.FaceLandmarker.create_from_options(opts)
-              def detect(frame, ts_ms):
-                  img = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(frame))
-                  res = lmk.detect_for_video(img, ts_ms)
-                  if not res.face_landmarks:
-                      return None
-                  best, best_area = None, -1.0
-                  for face in res.face_landmarks:                  # on garde le plus grand visage (le sujet)
-                      if len(face) < 478:
-                          continue
-                      pts = np.array([[p.x * W, p.y * H] for p in face], np.float32)
-                      area = float((pts[:, 0].max() - pts[:, 0].min()) * (pts[:, 1].max() - pts[:, 1].min()))
-                      if area > best_area:
-                          best, best_area = pts, area
-                  return best
-              return detect
-
-          def main():
-              ap = argparse.ArgumentParser()
-              ap.add_argument("--src"); ap.add_argument("--out"); ap.add_argument("--w", type=int); ap.add_argument("--h", type=int)
-              ap.add_argument("--fps"); ap.add_argument("--hdr", default="false"); ap.add_argument("--strength", type=float, default=0.8)
-              ap.add_argument("--model"); ap.add_argument("--preview", default="")
-              a = ap.parse_args()
-              detect = None
-              try:
-                  detect = mediapipe_detector(a.model, a.w, a.h)
-              except Exception as e:
-                  print("::warning::Détection des yeux indisponible (%s) : la vidéo sera produite sans changement des yeux." % str(e)[:200])
-              if detect is None:
-                  detect = lambda frame, ts: None
-              n, hits = run_pipeline(a.src, a.out, a.w, a.h, a.fps, a.hdr == "true", a.strength, detect, a.preview or None)
-              if n > 20 and hits < 0.2 * n:
-                  print("::warning::Visage détecté sur moins de 20 %% des images (%d/%d) : les yeux restent inchangés sur le reste de la vidéo." % (hits, n))
-
-          if __name__ == "__main__":
-              main()
-              sys.stdout.flush(); sys.stderr.flush()
-              os._exit(0)      # évite un message d'erreur inoffensif de MediaPipe à la fermeture
-          PY
-          OW=${OWV:-1920}; OH=${OHV:-1080}; FPS=${FPSV:-30}
-          beauty-venv/bin/python beauty_eyes.py --src input/video.mp4 --out eyemask.mkv --w "$OW" --h "$OH" --fps "$FPS" \
-            --hdr "${HDR:-false}" --strength "$EYE_STR" --model face_landmarker.task --preview "$PREVIEW" \
-            || { echo "::warning::Le traitement des yeux a échoué : la vidéo sera produite sans changement des yeux."; rm -f eyemask.mkv; }
-          test -s eyemask.mkv && echo "Masque des yeux prêt." || echo "Pas de masque des yeux."
-
-      - name: Composer la vidéo (fond remplacé + peau + yeux)
-        env:
-          BGH: ${{ steps.files.outputs.bg }}
+          CHUNK_MINUTES: ${{ github.event.inputs.chunk_minutes }}
+          BGH: ${{ github.event.inputs.background_file }}
           BGV: ${{ github.event.inputs.background_file_vertical }}
-          VERTICAL: ${{ steps.orient.outputs.vertical }}
-          OWV: ${{ steps.orient.outputs.out_w }}
-          OHV: ${{ steps.orient.outputs.out_h }}
-          FPSV: ${{ steps.orient.outputs.fps }}
-          HDR: ${{ steps.orient.outputs.hdr }}
-          PREVIEW: ${{ github.event.inputs.preview_seconds }}
+        run: |
+          python3 scripts/beauty_plan.py
+          if [ "$(grep '^vertical=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2)" = "true" ]; then
+            BG="input/${BGV:-background-vertical.jpg}"
+          else
+            BG="input/${BGH:-background.jpg}"
+          fi
+          test -f "$BG" || { echo "::error::Image de fond introuvable : $BG"; exit 1; }
+          echo "bg=$BG" >> "$GITHUB_OUTPUT"
+
+  chunks:
+    name: Morceau ${{ matrix.idx }}
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 16
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    steps:
+      - name: Checkout du repo
+        uses: actions/checkout@v4
+
+      - name: Installer FFmpeg, rclone et les outils de détection
+        env:
+          MODE: ${{ needs.prepare.outputs.mode }}
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends ffmpeg libgl1 libegl1 libgles2 libglib2.0-0 \
+            || sudo apt-get install -y -qq ffmpeg
+          if [ "$MODE" = "rclone" ]; then
+            (curl -fsSL https://rclone.org/install.sh | sudo bash) || sudo apt-get install -y -qq rclone
+            mkdir -p ~/.config/rclone && printf '%s\n' "$RCLONE_CONFIG_CONTENT" > ~/.config/rclone/rclone.conf
+          fi
+          python3 -m venv beauty-venv
+          if ! beauty-venv/bin/pip install --quiet "mediapipe==1.1.1"; then
+            beauty-venv/bin/pip install --quiet mediapipe \
+              || echo "::warning::Installation de MediaPipe impossible : la vidéo sera produite sans retouche peau / yeux."
+          fi
+          beauty-venv/bin/python -c "import cv2, numpy" 2>/dev/null || beauty-venv/bin/pip install --quiet numpy opencv-contrib-python-headless
+          beauty-venv/bin/python -c "import cv2; assert hasattr(cv2, 'ximgproc')" 2>/dev/null || echo "::notice::Filtre guidé absent : contours de peau un peu plus doux."
+          # Modèles (dans le repo, sinon téléchargés)
+          M=models; mkdir -p "$M"
+          test -s "$M/face_landmarker.task" || curl -fsSL --retry 3 -o "$M/face_landmarker.task" \
+            "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task" || true
+          test -s "$M/selfie_multiclass_256x256.tflite" || curl -fsSL --retry 3 -o "$M/selfie_multiclass_256x256.tflite" \
+            "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite" || true
+          ls -la "$M"
+
+      - name: Récupérer la vidéo téléchargée (lien direct / Google Drive)
+        if: needs.prepare.outputs.mode == 'url'
+        uses: actions/download-artifact@v4
+        with:
+          name: source-video
+          path: input
+
+      - name: Accéder à la vidéo source
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SOURCE: ${{ github.event.inputs.source }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          VIDEO_ASSET: ${{ needs.prepare.outputs.video_asset }}
+        run: bash scripts/get_source.sh open "${{ needs.prepare.outputs.mode }}"
+
+      - name: Fond remplacé + peau + yeux
+        env:
+          SS: ${{ matrix.ss }}
+          LEN: ${{ matrix.len }}
+          IDX: ${{ matrix.idx }}
+          KEY: ${{ needs.prepare.outputs.key }}
+          FPS: ${{ needs.prepare.outputs.fps }}
+          OW: ${{ needs.prepare.outputs.out_w }}
+          OH: ${{ needs.prepare.outputs.out_h }}
+          HDR: ${{ needs.prepare.outputs.hdr }}
+          BG: ${{ needs.prepare.outputs.bg }}
+          HAS_AUDIO: ${{ needs.prepare.outputs.has_audio }}
+          SKIN: ${{ github.event.inputs.skin_strength }}
+          EYES: ${{ github.event.inputs.eye_strength }}
           EYE_COLOR: ${{ github.event.inputs.eye_color }}
+          CLEAN: ${{ github.event.inputs.clean_edges }}
         run: |
           mkdir -p output
-          if [ "$VERTICAL" = "true" ]; then
-            BG="input/${BGV:-background-vertical.jpg}"
-            test -f "$BG" || { echo "Image de fond verticale introuvable : $BG"; exit 1; }
-            OW=${OWV:-1080}; OH=${OHV:-1920}
+          AUDIO=(); [ "$HAS_AUDIO" = "true" ] && AUDIO=(--audio-out "output/chunk_$IDX.wav")
+          beauty-venv/bin/python scripts/beauty.py \
+            --src "$SRC" --ss "$SS" --len "$LEN" --w "$OW" --h "$OH" --fps "$FPS" --hdr "${HDR:-false}" \
+            --bg "$BG" --key "$KEY" --skin "${SKIN:-60}" --eyes "${EYES:-80}" \
+            --eye-color "${EYE_COLOR:-bleu_clair}" --clean-edges "${CLEAN:-true}" --models models \
+            --out "output/chunk_$IDX.mp4" "${AUDIO[@]}"
+          test -s "output/chunk_$IDX.mp4"
+          if [ "$HAS_AUDIO" = "true" ]; then test -s "output/chunk_$IDX.wav"; fi
+          ls -la output
+
+      - name: Image de contrôle avant / après (premier morceau)
+        if: matrix.idx == 0
+        continue-on-error: true
+        env:
+          SS: ${{ matrix.ss }}
+          LEN: ${{ matrix.len }}
+        run: |
+          # 3 images du premier morceau : à gauche l'original, à droite le résultat (jointe à la Release)
+          ARGS=(); FILT=""; k=0
+          for p in 0.2 0.5 0.8; do
+            T=$(python3 -c "print(round(float('$LEN')*$p, 3))"); TS=$(python3 -c "print(round(float('$SS')+float('$LEN')*$p, 3))")
+            ARGS+=(-ss "$TS" -i "$SRC" -ss "$T" -i "output/chunk_0.mp4")
+            FILT+="[$((2*k)):v]scale=640:-2,setsar=1[a$k];[$((2*k+1)):v]scale=640:-2,setsar=1[b$k];[a$k][b$k]hstack[r$k];"
+            k=$((k+1))
+          done
+          FILT+="[r0][r1][r2]vstack=3"
+          ffmpeg -v error -y "${ARGS[@]}" -filter_complex "$FILT" -frames:v 1 -q:v 3 output/chunk_0.avant-apres.jpg
+          ls -la output/chunk_0.avant-apres.jpg
+
+      - name: Envoyer le morceau
+        uses: actions/upload-artifact@v4
+        with:
+          name: chunk-${{ matrix.idx }}
+          path: output/chunk_${{ matrix.idx }}.*
+          retention-days: 1
+          compression-level: 0
+
+  assemble:
+    name: Recoller et publier
+    needs: [prepare, chunks]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Libérer de l'espace disque
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - name: Installer FFmpeg (et rclone si configuré)
+        env:
+          HAS_RCLONE: ${{ secrets.RCLONE_CONFIG != '' }}
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          if [ "$HAS_RCLONE" = "true" ]; then
+            (curl -fsSL https://rclone.org/install.sh | sudo bash) || sudo apt-get install -y -qq rclone
+            mkdir -p ~/.config/rclone && printf '%s\n' "$RCLONE_CONFIG_CONTENT" > ~/.config/rclone/rclone.conf
+          fi
+
+      - name: Récupérer les morceaux
+        uses: actions/download-artifact@v4
+        with:
+          pattern: chunk-*
+          path: chunks
+          merge-multiple: true
+
+      - name: Recoller
+        env:
+          N: ${{ needs.prepare.outputs.n_chunks }}
+          HAS_AUDIO: ${{ needs.prepare.outputs.has_audio }}
+          OUT_NAME: ${{ needs.prepare.outputs.out_name }}
+        run: |
+          : > videos.txt; : > audios.txt
+          for i in $(seq 0 $((N-1))); do
+            test -s "chunks/chunk_$i.mp4" || { echo "::error::Morceau $i manquant : relance les jobs en échec (Re-run failed jobs)"; exit 1; }
+            echo "file '$PWD/chunks/chunk_$i.mp4'" >> videos.txt
+            if [ "$HAS_AUDIO" = "true" ]; then
+              test -s "chunks/chunk_$i.wav" || { echo "::error::Son du morceau $i manquant"; exit 1; }
+              echo "file '$PWD/chunks/chunk_$i.wav'" >> audios.txt
+            fi
+          done
+          mkdir -p output
+          if [ "$HAS_AUDIO" = "true" ]; then
+            ffmpeg -v error -y -f concat -safe 0 -i videos.txt -f concat -safe 0 -i audios.txt \
+              -map 0:v -map 1:a -c:v copy -c:a aac -b:a 192k -shortest -movflags +faststart "output/$OUT_NAME"
           else
-            BG="input/$BGH"
-            test -f "$BG" || { echo "Image de fond introuvable dans input/ : $BGH"; exit 1; }
-            OW=${OWV:-1920}; OH=${OHV:-1080}
+            ffmpeg -v error -y -f concat -safe 0 -i videos.txt -map 0:v -c:v copy -movflags +faststart "output/$OUT_NAME"
           fi
-          FPS=${FPSV:-30}
-          TM=""; [ "$HDR" = "true" ] && TM="zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=mobius:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,"
+          test -s chunks/chunk_0.avant-apres.jpg && cp chunks/chunk_0.avant-apres.jpg output/avant-apres.jpg || true
+          rm -rf chunks
+          ls -lh output
+          echo "SIZE=$(stat -c %s "output/$OUT_NAME")" >> "$GITHUB_ENV"
 
-          # Peau : masque de peau (couleur) adouci, puis version éclaircie et un peu moins rouge
-          SKIN_PART="[u0]copy[u1];"
-          if [ "$SKIN_ON" = "true" ] && [ -s skinmask.cube ]; then
-            C1=$(python3 -c "print(round(0.25+0.040*$SKIN_K,4))"); C2=$(python3 -c "print(round(0.5+0.075*$SKIN_K,4))"); C3=$(python3 -c "print(round(0.75+0.060*$SKIN_K,4))")
-            SAT=$(python3 -c "print(round(1-0.07*$SKIN_K,4))")
-            SKIN_PART="[u0]split=3[k0][k1][k2]; [k1]lut3d=file=skinmask.cube:interp=trilinear,format=gray,gblur=sigma=2.5[skm]; [k2]curves=all='0/0 0.25/$C1 0.5/$C2 0.75/$C3 1/1',colorbalance=rm=-0.03:bm=0.02,eq=saturation=$SAT[light]; [k0][light][skm]maskedmerge[u1];"
+      - name: Publier comme Release
+        id: rel
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OUT_NAME: ${{ needs.prepare.outputs.out_name }}
+          SOURCE_DESC: ${{ github.event.inputs.source || format('{0} / {1}', needs.prepare.outputs.release_tag, needs.prepare.outputs.video_asset) }}
+        run: |
+          if [ "$SIZE" -ge 2000000000 ]; then
+            echo "::warning::Résultat de plus de 2 Go : pas de Release possible (stockage externe ou artifact)."
+            echo "big=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
+          TAG="result-${{ github.run_number }}"
+          gh release create "$TAG" --repo "${{ github.repository }}" \
+            --title "Résultat beauté run #${{ github.run_number }}" \
+            --notes "Fond remplacé + peau + yeux, généré automatiquement. Source : $SOURCE_DESC" \
+            output/* || gh release upload "$TAG" output/* --repo "${{ github.repository }}" --clobber
+          echo "- Release : https://github.com/${{ github.repository }}/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"
 
-          # Yeux : version bleue (texture de l'iris conservée) appliquée seulement dans le masque des yeux
-          case "$EYE_COLOR" in
-            vert)           EYE_CURVE="0/0 0.1/0.26 0.2/0.44 0.4/0.68 1/1"; EYE_MIX="rr=0.62:gg=0.78:bb=0.52";;
-            bleu_intense)   EYE_CURVE="0/0 0.08/0.36 0.2/0.60 0.4/0.82 1/1"; EYE_MIX="rr=0.70:gg=0.86:bb=1.0";;
-            *)              EYE_CURVE="0/0 0.1/0.30 0.2/0.50 0.4/0.74 1/1"; EYE_MIX="rr=0.64:gg=0.82:bb=1.0";;
-          esac
-          EYE_IN=()
-          EYE_PART="[u1]copy[u2];"
-          if [ "$EYES_ON" = "true" ] && [ -s eyemask.mkv ]; then
-            EYE_IN=(-i eyemask.mkv)
-            EYE_PART="[u1]split=2[e0][e1]; [e1]format=gray,format=gbrp,curves=all='$EYE_CURVE',colorchannelmixer=$EYE_MIX[blue]; [2:v]format=gray[em]; [e0][blue][em]maskedmerge[u2];"
+      - name: Envoyer sur le stockage externe (rclone)
+        env:
+          DEST: ${{ github.event.inputs.dest || vars.RCLONE_DEST }}
+          WANT: ${{ github.event.inputs.dest != '' || needs.prepare.outputs.mode == 'rclone' || steps.rel.outputs.big == 'true' }}
+          HAS_RCLONE: ${{ secrets.RCLONE_CONFIG != '' }}
+          OUT_NAME: ${{ needs.prepare.outputs.out_name }}
+        run: |
+          if [ "$WANT" != "true" ]; then echo "Pas d'envoi externe demandé."; exit 0; fi
+          if [ "$HAS_RCLONE" != "true" ] || [ -z "$DEST" ]; then
+            echo "::warning::Stockage externe non configuré (secret RCLONE_CONFIG + 'dest' ou variable RCLONE_DEST) : résultat disponible en artifact."
+            exit 0
           fi
-
-          FILTER="
-            [1:v]scale=$OW:$OH:force_original_aspect_ratio=increase,crop=$OW:$OH,setsar=1[bg];
-            [0:v]${TM}scale=$OW:$OH,setsar=1,fps=$FPS,split=2[a][c];
-            [a]format=yuva420p,chromakey=0x$KEY_HEX:$KEY_SIM:0.06,alphaextract,erosion,erosion,erosion,boxblur=1:1[mat];
-            [c]format=gbrp,lut3d=file=unmix.cube:interp=tetrahedral[u0];
-            $SKIN_PART
-            $EYE_PART
-            [u2]format=rgba[cl];
-            [cl][mat]alphamerge[fg];
-            [bg][fg]overlay=shortest=1:format=auto[out]
-          "
-
-          PREV=(); [ -n "$PREVIEW" ] && PREV=(-t "$PREVIEW")
-          ffmpeg -y \
-            "${PREV[@]}" -i "input/video.mp4" \
-            -framerate "$FPS" -loop 1 -i "$BG" \
-            "${EYE_IN[@]}" \
-            -filter_complex "$FILTER" \
-            -map "[out]" -map 0:a? \
-            -c:v libx264 -preset slow -crf 17 -pix_fmt yuv420p \
-            -c:a aac -b:a 192k \
-            output/result.mp4
+          rclone copyto "output/$OUT_NAME" "$DEST/$OUT_NAME" --retries 5
+          LINK="$(rclone link "$DEST/$OUT_NAME" 2>/dev/null || true)"
+          { echo "- Stockage : \`$DEST/$OUT_NAME\`"; [ -n "$LINK" ] && echo "- Lien : $LINK"; } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload du résultat en artifact
         uses: actions/upload-artifact@v4
         with:
-          name: video-fond-remplace
-          path: output/result.mp4
+          name: video-beaute
+          path: output/
           retention-days: 14
+          compression-level: 0
 
-      - name: Publier le résultat comme Release (gère les gros fichiers)
+      - name: Nettoyer les morceaux temporaires
+        if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="result-${{ github.run_number }}"
-          gh release create "$TAG" \
-            --repo "${{ github.repository }}" \
-            --title "Résultat run #${{ github.run_number }}" \
-            --notes "Vidéo fond remplacé, générée automatiquement." \
-            "output/result.mp4" || gh release upload "$TAG" "output/result.mp4" --repo "${{ github.repository }}" --clobber
+          for id in $(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts?per_page=100" \
+                      --jq '.artifacts[] | select(.name|startswith("chunk-") or . == "source-video") | .id'); do
+            gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/$id" >/dev/null || true
+          done

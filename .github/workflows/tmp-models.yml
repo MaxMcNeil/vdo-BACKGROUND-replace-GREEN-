@@ -1,0 +1,17 @@
+name: tmp-models (temporaire)
+permissions:
+  contents: write
+on:
+  push:
+    branches: [tmp-models]
+jobs:
+  m:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -fsSL -o face_landmarker.task https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task
+          curl -fsSL -o selfie_multiclass_256x256.tflite https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite
+          python3 --version > info.txt; pip --version >> info.txt; ls -la >> info.txt
+          gh release create tmp-models --repo "${{ github.repository }}" --target tmp-models --prerelease --title tmp-models --notes "temporaire (Claude), sera supprimé" face_landmarker.task selfie_multiclass_256x256.tflite info.txt

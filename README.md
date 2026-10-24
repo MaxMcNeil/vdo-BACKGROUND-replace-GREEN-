@@ -64,6 +64,13 @@ Dans tous les cas, l'image de fond est **recadrée au centre** pour remplir l'é
 - **Cadence d'images** : le résultat garde celle de la vidéo d'origine (24, 25, 30, 50, 60 i/s, ou les variantes 29,97 / 23,976). Une cadence variable (téléphone) est ramenée à une cadence constante.
 - **HDR** (HLG ou HDR10, par exemple filmé avec « HDR vidéo » activé) : le workflow le détecte et convertit la vidéo en SDR avant le traitement. Sans cette conversion, la couleur du fond serait mal mesurée et le sujet pourrait disparaître. La conversion a été testée sur une vidéo HLG simulée, pas sur un vrai fichier de téléphone : si le rendu d'une vraie vidéo HDR ne te convient pas, filme en SDR.
 
+## Nettoyage des bords (mur autour du tissu vert)
+
+Si le tissu vert ne remplit pas toute l'image (mur blanc visible sur les côtés, plafond...), ces zones sont aussi remplacées par le fond, dans tous les workflows (`clean_edges`, activé par défaut) :
+- la zone du tissu est mesurée sur 16 images de la vidéo ; **sur le tissu, le résultat est strictement identique à avant** (vérifié pixel par pixel) ;
+- en dehors, seule ta silhouette est gardée (un bras tendu au-dessus du mur reste visible), repérée par un modèle de segmentation ;
+- si le tissu remplit l'image, ou en cas de problème, rien ne change : la vidéo est traitée exactement comme avant. Mets `clean_edges` à non pour le désactiver.
+
 ## Réglages automatiques
 
 Avant le traitement, le workflow mesure ton fond vert :

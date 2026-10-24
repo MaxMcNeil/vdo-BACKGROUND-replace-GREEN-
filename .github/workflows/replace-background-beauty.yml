@@ -88,6 +88,7 @@ jobs:
       mode: ${{ steps.src.outputs.mode }}
       release_tag: ${{ steps.src.outputs.release_tag }}
       video_asset: ${{ steps.src.outputs.video_asset }}
+      source: ${{ steps.src.outputs.source }}
       bg: ${{ steps.plan.outputs.bg }}
     steps:
       - name: Checkout du repo
@@ -192,7 +193,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          SOURCE: ${{ github.event.inputs.source }}
+          SOURCE: ${{ needs.prepare.outputs.source }}
           RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
           VIDEO_ASSET: ${{ needs.prepare.outputs.video_asset }}
         run: bash scripts/get_source.sh open "${{ needs.prepare.outputs.mode }}"

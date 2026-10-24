@@ -38,6 +38,11 @@ on:
         description: 'Couleur du fond vert en hex (ex: 139D74). Laisser vide = mesure automatique'
         required: false
         default: ''
+      clean_edges:
+        description: 'Remplacer aussi le mur / plafond visibles autour du tissu vert (le traitement sur le tissu reste identique)'
+        required: false
+        type: boolean
+        default: true
       chunk_minutes:
         description: 'Durée de chaque morceau en minutes (traités en parallèle). Vide = automatique (environ 12 morceaux, de 3 à 10 minutes)'
         required: false
@@ -384,6 +389,27 @@ jobs:
           python3 mklut.py
           test -s unmix.cube
 
+      - name: Nettoyage des bords (mur autour du tissu vert)
+        if: github.event.inputs.clean_edges != 'false'
+        continue-on-error: true
+        env:
+          SS: ${{ matrix.ss }}
+          LEN: ${{ matrix.len }}
+          FPS: ${{ needs.prepare.outputs.fps }}
+          OWV: ${{ needs.prepare.outputs.out_w }}
+          OHV: ${{ needs.prepare.outputs.out_h }}
+        run: |
+          # Masque supplémentaire : 255 sur toute la zone du tissu (le résultat y est identique à avant),
+          # silhouette seule en dehors. En cas d'échec : pas de masque, traitement exactement comme avant.
+          rm -f edgemask.mkv
+          sudo apt-get install -y -qq --no-install-recommends libgl1 libegl1 libgles2 libglib2.0-0 || true
+          python3 -m venv edge-venv && edge-venv/bin/pip install --quiet "mediapipe==1.1.1" || { echo "::warning::Outils indisponibles : pas de nettoyage des bords."; exit 0; }
+          RC=0
+          edge-venv/bin/python scripts/edge_mask.py --src "$SRC" --ss "$SS" --len "$LEN" --w "$OWV" --h "$OHV" --fps "$FPS" \
+            --hdr "${HDR:-false}" --ek "$KEY_EK" --model models/selfie_multiclass_256x256.tflite --out edgemask.mkv || RC=$?
+          if [ "$RC" != 0 ]; then rm -f edgemask.mkv; [ "$RC" = 3 ] || echo "::warning::Nettoyage des bords impossible : morceau traité comme avant."; fi
+          test -s edgemask.mkv && echo "Masque des bords prêt." || true
+
       - name: Composer le morceau (mêmes filtres que le workflow principal)
         if: needs.prepare.outputs.vertical != 'true'
         env:
@@ -401,10 +427,14 @@ jobs:
           OW=${OWV:-1920}; OH=${OHV:-1080}
           TM=""; [ "$HDR" = "true" ] && TM="zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=mobius:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,"
 
+          # Nettoyage des bords : masque multiplié (255 = inchangé)
+          EDGE_IN=(); EDGE=""; MATOUT="[mat]"
+          if [ -s edgemask.mkv ]; then EDGE_IN=(-i edgemask.mkv); MATOUT="[mat0]"; EDGE="[2:v]format=gray,setsar=1[keep]; [mat0][keep]blend=all_mode=multiply[mat];"; fi
           FILTER="
             [1:v]scale=$OW:$OH:force_original_aspect_ratio=increase,crop=$OW:$OH,setsar=1[bg];
             [0:v]${TM}scale=$OW:$OH,setsar=1,split=2[a][c];
-            [a]format=yuva420p,chromakey=0x$KEY_HEX:$KEY_SIM:0.06,alphaextract,erosion,erosion,erosion,boxblur=1:1[mat];
+            [a]format=yuva420p,chromakey=0x$KEY_HEX:$KEY_SIM:0.06,alphaextract,erosion,erosion,erosion,boxblur=1:1$MATOUT;
+            $EDGE
             [c]format=gbrp,lut3d=file=unmix.cube:interp=tetrahedral,format=rgba[cl];
             [cl][mat]alphamerge[fg];
             [bg][fg]overlay=shortest=1:format=auto[out]
@@ -419,6 +449,7 @@ jobs:
           ffmpeg -y \
             -ss "$SS" -t "$LEN" -i "$SRC" \
             -framerate "$FPS" -loop 1 -i "$BG" \
+            "${EDGE_IN[@]}" \
             -filter_complex "$FILTER" \
             -map "[out]" \
             -c:v libx264 -preset slow -crf 17 -pix_fmt yuv420p -r "$FPS" -fps_mode cfr \
@@ -442,10 +473,14 @@ jobs:
           OW=${OWV:-1080}; OH=${OHV:-1920}
           TM=""; [ "$HDR" = "true" ] && TM="zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=mobius:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,"
 
+          # Nettoyage des bords : masque multiplié (255 = inchangé)
+          EDGE_IN=(); EDGE=""; MATOUT="[mat]"
+          if [ -s edgemask.mkv ]; then EDGE_IN=(-i edgemask.mkv); MATOUT="[mat0]"; EDGE="[2:v]format=gray,setsar=1[keep]; [mat0][keep]blend=all_mode=multiply[mat];"; fi
           FILTER="
             [1:v]scale=$OW:$OH:force_original_aspect_ratio=increase,crop=$OW:$OH,setsar=1[bg];
             [0:v]${TM}scale=$OW:$OH,setsar=1,split=2[a][c];
-            [a]format=yuva420p,chromakey=0x$KEY_HEX:$KEY_SIM:0.06,alphaextract,erosion,erosion,erosion,boxblur=1:1[mat];
+            [a]format=yuva420p,chromakey=0x$KEY_HEX:$KEY_SIM:0.06,alphaextract,erosion,erosion,erosion,boxblur=1:1$MATOUT;
+            $EDGE
             [c]format=gbrp,lut3d=file=unmix.cube:interp=tetrahedral,format=rgba[cl];
             [cl][mat]alphamerge[fg];
             [bg][fg]overlay=shortest=1:format=auto[out]
@@ -460,6 +495,7 @@ jobs:
           ffmpeg -y \
             -ss "$SS" -t "$LEN" -i "$SRC" \
             -framerate "$FPS" -loop 1 -i "$BG" \
+            "${EDGE_IN[@]}" \
             -filter_complex "$FILTER" \
             -map "[out]" \
             -c:v libx264 -preset slow -crf 17 -pix_fmt yuv420p -r "$FPS" -fps_mode cfr \

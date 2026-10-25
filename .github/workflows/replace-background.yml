@@ -394,7 +394,7 @@ jobs:
           app-id: ${{ vars.CHAINE_APP_ID }}
           private-key: ${{ secrets.CHAINE_APP_KEY }}
           owner: ${{ github.repository_owner }}
-          repositories: montage-lv-final
+          repositories: Montage-LV-final
 
       - name: Chaîne — transmettre à Montage LV final
         if: steps.route.outputs.long != 'true' && github.event.inputs.enchainer == 'true'

@@ -13,7 +13,7 @@
 # Ménage : fichiers de chaine/ de plus de 2 jours supprimés définitivement (pas de corbeille) à chaque envoi.
 set -euo pipefail
 ACTION="${1:-}"
-CIBLE_REPO="${CHAINE_MONTAGE_REPO:-MaxMcNeil/montage-lv-final}"
+CIBLE_REPO="${CHAINE_MONTAGE_REPO:-MaxMcNeil/Montage-LV-final}"
 JOINTS="${CHAINE_JOINTS:-montage-joints}"
 FINDER="$(printf '%s' "${CHAINE_FINDER:-oui}" | tr 'A-Z' 'a-z')"
 case "$FINDER" in non|no|false|0) FINDER=non;; *) FINDER=oui;; esac

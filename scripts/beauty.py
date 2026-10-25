@@ -403,44 +403,68 @@ class Beauty:
 
 
 # ---------------------------------------------------------------- zone du tissu vert (mesurée une fois par vidéo)
-def analyze_cloth(src, W, H, TM, EK, n=16):
-    """Masque (0..1, taille W x H) de la zone couverte par le tissu vert, ou None si le tissu remplit l'image.
-    = pixels verts sur au moins une des n images, + l'intérieur de la zone (là où tu te tiens),
-    sans la bande de mur, plafond, etc. visible autour du tissu."""
+def analyze_cloth(src, W, H, TM, EK, n=16, seg_model=None):
+    """Masque (0..1, taille W x H) : 1 = zone traitée normalement, 0 = « mur » à remplacer par le fond.
+    Est considéré comme mur UNIQUEMENT ce qui est à la fois :
+      - jamais vert sur les n images,
+      - immobile (même couleur d'une image à l'autre),
+      - jamais occupé par toi (silhouette détectée sur les n images, avec une large marge),
+      - relié au bord de l'image.
+    Tout le reste (toi, tes vêtements, le tissu) garde exactement le traitement habituel. None = rien à nettoyer."""
     dur = float(subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", src]).decode().strip())
     w, h = 384, int(round(384 * H / float(W)))
-    acc = np.zeros((h, w), np.uint8)
-    got = 0
+    frames = []
     for k in range(n):
         t = dur * (k + 0.5) / n
         raw = subprocess.run(["ffmpeg", "-v", "error", "-ss", "%.3f" % t, "-i", src, "-frames:v", "1",
                               "-vf", TM + "scale=%d:%d:flags=area,format=rgb24" % (w, h), "-f", "rawvideo", "-"],
                              capture_output=True).stdout
-        if len(raw) != w * h * 3:
-            continue
-        f = np.frombuffer(raw, np.uint8).reshape(h, w, 3).astype(np.float32)
-        exg = f[..., 1] - (f[..., 0] + f[..., 2]) / 2.0
-        acc = np.maximum(acc, ((exg > 0.35 * EK) * 255).astype(np.uint8))
-        got += 1
-    if got < 3:
+        if len(raw) == w * h * 3:
+            frames.append(np.frombuffer(raw, np.uint8).reshape(h, w, 3))
+    if len(frames) < 3:
         return None
-    g = cv2.morphologyEx(acc, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
-    g = cv2.morphologyEx(g, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
-    cnts, _ = cv2.findContours(g, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not cnts:
+    green = np.zeros((h, w), bool)
+    for f in frames:
+        f32 = f.astype(np.float32)
+        green |= (f32[..., 1] - (f32[..., 0] + f32[..., 2]) / 2.0) > 0.35 * EK
+    if green.mean() < 0.25:                                             # tissu non reconnu : pas de nettoyage
         return None
-    big = max(cnts, key=cv2.contourArea)
-    if cv2.contourArea(big) < 0.25 * w * h:                            # tissu non reconnu : pas de nettoyage
+    gray = np.stack([cv2.cvtColor(f, cv2.COLOR_RGB2GRAY).astype(np.float32) for f in frames])
+    still = gray.std(axis=0) < 9.0
+    person = np.zeros((h, w), bool)
+    if seg_model and os.path.exists(seg_model):
+        try:
+            import mediapipe as mp
+            from mediapipe.tasks import python as mpp
+            from mediapipe.tasks.python import vision
+            seg = vision.ImageSegmenter.create_from_options(vision.ImageSegmenterOptions(
+                base_options=mpp.BaseOptions(model_asset_path=seg_model), running_mode=vision.RunningMode.IMAGE,
+                output_confidence_masks=True, output_category_mask=False))
+            for f in frames:
+                r = seg.segment(mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(f)))
+                person |= (1.0 - np.squeeze(r.confidence_masks[0].numpy_view())) > 0.15
+        except Exception as e:
+            log("::warning::Silhouette non détectée pour la mesure des bords (%s) : pas de nettoyage." % str(e)[:120])
+            return None
+    else:
         return None
-    hull = np.zeros_like(g)
-    cv2.fillPoly(hull, [cv2.convexHull(big)], 255)
-    # bord de l'image touché par le tissu : la zone continue jusqu'au bord (pas de bande sur le cadre)
-    inner = cv2.erode(hull, np.ones((int(0.05 * w) * 2 + 1,) * 2, np.uint8), borderType=cv2.BORDER_REPLICATE)
-    m = np.maximum(cv2.erode(g, np.ones((5, 5), np.uint8)), inner)       # rentré de quelques pixels : le bord du tissu (pli clair) est retiré aussi
-    if m.mean() > 252.0:
+    m = int(0.06 * w) * 2 + 1                                           # large marge autour de toi
+    person = cv2.dilate(person.astype(np.uint8), np.ones((m, m), np.uint8)) > 0
+    greenish = cv2.dilate(green.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
+    wall = (~greenish) & still & (~person)
+    wall = cv2.morphologyEx(wall.astype(np.uint8) * 255, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+    nlab, lab, stats, _ = cv2.connectedComponentsWithStats(wall, 8)
+    keep_wall = np.zeros((h, w), np.uint8)
+    for i in range(1, nlab):
+        x, y, bw, bh, area = stats[i]
+        touches = x == 0 or y == 0 or x + bw >= w or y + bh >= h
+        if touches and area > 0.002 * w * h:
+            keep_wall[lab == i] = 255
+    if keep_wall.max() == 0:
         return None
-    m = cv2.resize(m, (W, H), interpolation=cv2.INTER_LINEAR).astype(np.float32) / 255.0
-    return cv2.GaussianBlur(m, (0, 0), 2.0)
+    zone = 255 - keep_wall
+    zone = cv2.resize(zone, (W, H), interpolation=cv2.INTER_LINEAR).astype(np.float32) / 255.0
+    return cv2.GaussianBlur(zone, (0, 0), 2.0)
 
 
 # ---------------------------------------------------------------- programme principal
@@ -484,7 +508,7 @@ def main():
     cloth = None
     if a.clean_edges == "true":
         try:
-            cloth = analyze_cloth(a.src, W, H, TM, float(EK))
+            cloth = analyze_cloth(a.src, W, H, TM, float(EK), seg_model=os.path.join(a.models, "selfie_multiclass_256x256.tflite"))
         except Exception as e:
             log("::warning::Zone du tissu non mesurée (%s) : pas de nettoyage des bords." % str(e)[:150])
         if cloth is not None and a.debug_frames:

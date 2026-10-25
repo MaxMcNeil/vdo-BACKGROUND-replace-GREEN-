@@ -34,7 +34,7 @@ def main():
     TM = ("zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=mobius:desat=0,"
           "zscale=t=bt709:m=bt709:r=tv,format=yuv420p,") if a.hdr == "true" else ""
 
-    zone = analyze_cloth(a.src, W, H, TM, a.ek)
+    zone = analyze_cloth(a.src, W, H, TM, a.ek, seg_model=a.model)
     if zone is None:
         log("Tissu vert sur toute l'image : rien à nettoyer, traitement identique à avant.")
         sys.exit(3)

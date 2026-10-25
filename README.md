@@ -67,7 +67,7 @@ Dans tous les cas, l'image de fond est **recadrée au centre** pour remplir l'é
 ## Nettoyage des bords (mur autour du tissu vert)
 
 Si le tissu vert ne remplit pas toute l'image (mur blanc visible sur les côtés, plafond...), ces zones sont aussi remplacées par le fond, dans tous les workflows (`clean_edges`, activé par défaut) :
-- la zone du tissu est mesurée sur 16 images de la vidéo ; **sur le tissu, le résultat est strictement identique à avant** (vérifié pixel par pixel) ;
+- seul ce qui est **à la fois** jamais vert, immobile, jamais occupé par toi (silhouette repérée sur 16 images, avec une large marge) et relié au bord de l'image est considéré comme « mur » ; **partout ailleurs (toi, tes vêtements, le tissu), le résultat est strictement identique à avant** ;
 - en dehors, seule ta silhouette est gardée (un bras tendu au-dessus du mur reste visible), repérée par un modèle de segmentation ;
 - si le tissu remplit l'image, ou en cas de problème, rien ne change : la vidéo est traitée exactement comme avant. Mets `clean_edges` à non pour le désactiver.
 

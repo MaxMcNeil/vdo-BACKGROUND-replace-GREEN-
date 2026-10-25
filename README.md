@@ -172,6 +172,50 @@ Tout vide : le workflow prend tout seul la dernière vidéo mise en Release.
 - **Premier essai** : lance avec `preview_seconds` à `15` et regarde `avant-apres.jpg`. Ajuste `eye_strength` si besoin.
 - **Dans le log** : l'étape « Fond remplacé + yeux » affiche `visage détecté sur X (Y %)`. Si Y est proche de 0, les yeux ne sont pas retouchés.
 
+## 🔗 Chaîne : fond vert → Montage LV final → Shorts
+
+Coche **enchainer** au lancement (*Replace Green Screen Background* ou *… + Beauté (yeux)*) : quand le fond vert
+est terminé (et publié comme d'habitude), la vidéo part toute seule dans **Montage LV final**, puis le montage part
+dans **Video to Shorts** (Push-overlay). Sans la case cochée, **rien ne change**.
+
+| Choix au lancement | Ce qui se passe |
+|---|---|
+| `chaine_finder: oui` (défaut) | le montage reprend le **dernier lot de Vid-o-presse-finder** (+ les fichiers éventuels du dossier Drive `montage-joints`) |
+| `chaine_finder: non` | le montage prend **seulement** tes photos / vidéos du dossier Google Drive **`montage-joints`** — à remplir **avant** de lancer (noms libres). Dossier vide = arrêt immédiat, avant tout traitement |
+
+**Où arrive quoi**
+- Fond vert : comme d'habitude (release `result-…` ou ton Drive).
+- Vidéos intermédiaires : Google Drive, dossier `chaine/<id>/` — **privé**, supprimé définitivement après **2 jours**.
+- Montage : release **`out-chaine-<id>`** dans montage-lv-final (+ PLAN.md) ; Shorts : release **`out-chaine-<id>`**
+  dans push-overlay. Ces releases sont **supprimées après 2 jours** : télécharge avant. Tes résultats manuels
+  (`out-montage`, `out-shorts`, dossiers Drive « derniers ») ne sont **jamais** touchés par la chaîne.
+- `montage-joints` : après un montage réussi, seuls les fichiers réellement utilisés sont retirés (corbeille Drive,
+  récupérables 30 jours) ; un fichier ajouté pendant le montage reste pour la vidéo suivante.
+
+**Robustesse**
+- Tout est vérifié **avant** le traitement (Drive, jeton, dossier `montage-joints`) : un oubli coûte 1 minute, pas 1 heure.
+- Chaque étape transmet un « bon de livraison » précis (identifiant Drive de la vidéo) : aucune étape ne devine
+  « la dernière vidéo », deux chaînes lancées à la suite ne se mélangent pas.
+- Une étape en échec s'arrête net avec un message clair dans son dépôt (onglet Actions) ; après correction :
+  **Re-run jobs** sur ce run — la vidéo l'attend 2 jours sur Drive. Chaque dépôt a son propre run : relancer le montage ne refait pas le fond vert.
+- « Test rapide » (Beauté, `preview_seconds`) + chaîne : refusé, pour ne pas monter un extrait de test.
+- Aucun cron : la chaîne ne se déclenche que quand tu lances le fond vert avec la case cochée.
+
+**Mise en place (une fois, depuis le téléphone)**
+1. **Même compte Google partout** : le secret `RCLONE_CONFIG` (ce dépôt) et `RCLONE_CONF` (montage-lv-final et
+   push-overlay) doivent pointer vers le même Google Drive. Crée le dossier **`montage-joints`** à la racine de ce Drive.
+2. **Jeton de la chaîne — GitHub App** (recommandé : n'expire jamais) :
+   - github.com → *Settings → Developer settings → GitHub Apps → New GitHub App* ; nom libre (ex. `chaine-maxmcneil`),
+     *Homepage URL* : l'adresse de ce dépôt ; **décoche** *Webhook → Active* ;
+     *Repository permissions → Contents : Read and write* ; *Only on this account* → **Create GitHub App**.
+   - Note l'**App ID** ; en bas : **Generate a private key** (un fichier `.pem` se télécharge).
+   - *Install App* → ton compte → **Only select repositories** : `montage-lv-final` et `push-overlay`.
+   - Dans **ce dépôt** et dans **montage-lv-final** : *Settings → Secrets and variables → Actions* :
+     onglet **Variables** → `CHAINE_APP_ID` = l'App ID ; onglet **Secrets** → `CHAINE_APP_KEY` = tout le contenu du `.pem`.
+   - Alternative plus simple mais qui expire : un *fine-grained token* (dépôts montage-lv-final + push-overlay,
+     *Contents : Read and write*) dans un secret `CHAINE_TOKEN` de ces deux mêmes dépôts.
+3. Test : lance une vidéo courte avec **enchainer** coché, puis suis les onglets Actions des trois dépôts.
+
 ## Dépannage
 
 | Message | Que faire |

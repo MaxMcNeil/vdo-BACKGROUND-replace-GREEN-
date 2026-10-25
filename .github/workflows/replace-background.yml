@@ -35,6 +35,17 @@ on:
         description: "Mettre 'true' pour forcer le traitement normal même si la vidéo est longue"
         required: false
         default: 'false'
+      enchainer:
+        description: "🔗 Chaîne : enchaîner ensuite Montage LV final puis les Shorts (Push-overlay)"
+        required: false
+        type: boolean
+        default: false
+      chaine_finder:
+        description: "🔗 Chaîne — synchro Vid-o-presse-finder. oui = son dernier lot. non = SEULEMENT tes photos/vidéos du dossier Google Drive « montage-joints » (à remplir AVANT de lancer, noms libres ; vidé après le montage)"
+        required: false
+        type: choice
+        options: [oui, non]
+        default: oui
 
 jobs:
   replace-background:
@@ -71,6 +82,14 @@ jobs:
         run: |
           test -f "input/video.mp4" || (echo "Vidéo introuvable — vérifie le tag/nom d'asset de la Release" && exit 1)
 
+      - name: Chaîne — vérifier que tout est prêt (avant le traitement)
+        if: github.event.inputs.enchainer == 'true'
+        env:
+          CHAINE_FINDER: ${{ github.event.inputs.chaine_finder }}
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
+          CHAINE_JETON_CONFIGURE: ${{ (vars.CHAINE_APP_ID != '' && secrets.CHAINE_APP_KEY != '') || secrets.CHAINE_TOKEN != '' }}
+        run: bash scripts/chaine.sh verifier
+
       - name: Aiguillage (vidéo longue -> workflow dédié, découpage en parallèle)
         id: route
         continue-on-error: true
@@ -86,6 +105,8 @@ jobs:
           BGH: ${{ steps.files.outputs.bg }}
           BGV: ${{ github.event.inputs.background_file_vertical }}
           CLEAN_EDGES: ${{ github.event.inputs.clean_edges }}
+          ENCHAINER: ${{ github.event.inputs.enchainer }}
+          CHAINE_FINDER: ${{ github.event.inputs.chaine_finder }}
         run: |
           DUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "input/video.mp4")
           echo "Durée de la vidéo : ${DUR}s (seuil vidéo longue : ${LONG_MINUTES} min)"
@@ -98,6 +119,7 @@ jobs:
             ARGS=(-f "release_tag=$RTAG" -f "video_asset=$RASSET" -f "background_file=$BGH" -f "background_file_vertical=${BGV:-background-vertical.jpg}" -f "dest=$RCLONE_DEST")
             [ -n "$KEY_COLOR" ] && ARGS+=(-f "key_color=$KEY_COLOR")
             ARGS+=(-f "clean_edges=${CLEAN_EDGES:-true}")
+            ARGS+=(-f "enchainer=${ENCHAINER:-false}" -f "chaine_finder=${CHAINE_FINDER:-oui}")
             if gh workflow run replace-background-long.yml --repo "${{ github.repository }}" "${ARGS[@]}"; then
               echo "long=true" >> "$GITHUB_OUTPUT"
               echo "::notice::Vidéo longue : traitement lancé dans le workflow 'vidéos longues' (onglet Actions). Le résultat sera envoyé sur ton stockage externe."
@@ -362,3 +384,22 @@ jobs:
             --title "Résultat run #${{ github.run_number }}" \
             --notes "Vidéo fond remplacé, générée automatiquement." \
             "output/result.mp4" || gh release upload "$TAG" "output/result.mp4" --repo "${{ github.repository }}" --clobber
+
+      - name: Chaîne — jeton GitHub App
+        id: chaine_tok
+        if: steps.route.outputs.long != 'true' && github.event.inputs.enchainer == 'true' && vars.CHAINE_APP_ID != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.CHAINE_APP_ID }}
+          private-key: ${{ secrets.CHAINE_APP_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: montage-lv-final
+
+      - name: Chaîne — transmettre à Montage LV final
+        if: steps.route.outputs.long != 'true' && github.event.inputs.enchainer == 'true'
+        env:
+          CHAINE_FINDER: ${{ github.event.inputs.chaine_finder }}
+          CHAINE_GH_TOKEN: ${{ steps.chaine_tok.outputs.token || secrets.CHAINE_TOKEN }}
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
+        run: bash scripts/chaine.sh envoyer output/result.mp4

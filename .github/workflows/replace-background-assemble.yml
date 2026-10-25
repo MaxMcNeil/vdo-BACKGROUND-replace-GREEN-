@@ -27,6 +27,17 @@ on:
         description: 'Dossier rclone (ex: gdrive:resultats). Vide = variable RCLONE_DEST'
         required: false
         default: ''
+      enchainer:
+        description: "🔗 Chaîne : enchaîner ensuite Montage LV final puis les Shorts (Push-overlay)"
+        required: false
+        type: boolean
+        default: false
+      chaine_finder:
+        description: "🔗 Chaîne — synchro Vid-o-presse-finder (non = photos/vidéos du dossier Google Drive « montage-joints »)"
+        required: false
+        type: choice
+        options: [oui, non]
+        default: oui
 
 jobs:
   assemble:
@@ -122,3 +133,28 @@ jobs:
             [ -n "$LINK" ] && echo "- Lien : $LINK" || echo "- (ce stockage ne fournit pas de lien public : ouvre le fichier depuis ton stockage)"
           } | tee -a "$GITHUB_STEP_SUMMARY"
           rclone purge "$TMP" || true
+
+      - name: Checkout des scripts de la chaîne
+        if: github.event.inputs.enchainer == 'true'
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts
+          path: repo
+
+      - name: Chaîne — jeton GitHub App
+        id: chaine_tok
+        if: github.event.inputs.enchainer == 'true' && vars.CHAINE_APP_ID != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.CHAINE_APP_ID }}
+          private-key: ${{ secrets.CHAINE_APP_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: montage-lv-final
+
+      - name: Chaîne — transmettre à Montage LV final
+        if: github.event.inputs.enchainer == 'true'
+        env:
+          CHAINE_FINDER: ${{ github.event.inputs.chaine_finder }}
+          CHAINE_GH_TOKEN: ${{ steps.chaine_tok.outputs.token || secrets.CHAINE_TOKEN }}
+        run: bash repo/scripts/chaine.sh envoyer "$DEST/$OUT_NAME"

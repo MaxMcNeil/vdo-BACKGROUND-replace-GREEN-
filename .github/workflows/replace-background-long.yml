@@ -47,6 +47,17 @@ on:
         description: 'Durée de chaque morceau en minutes (traités en parallèle). Vide = automatique (environ 12 morceaux, de 3 à 10 minutes)'
         required: false
         default: ''
+      enchainer:
+        description: "🔗 Chaîne : enchaîner ensuite Montage LV final puis les Shorts (Push-overlay)"
+        required: false
+        type: boolean
+        default: false
+      chaine_finder:
+        description: "🔗 Chaîne — synchro Vid-o-presse-finder. oui = son dernier lot. non = SEULEMENT tes photos/vidéos du dossier Google Drive « montage-joints » (à remplir AVANT de lancer ; vidé après le montage)"
+        required: false
+        type: choice
+        options: [oui, non]
+        default: oui
 
 jobs:
   prepare:
@@ -87,6 +98,14 @@ jobs:
           fi
           mkdir -p ~/.config/rclone
           printf '%s\n' "$RCLONE_CONFIG_CONTENT" > ~/.config/rclone/rclone.conf
+
+      - name: Chaîne — vérifier que tout est prêt (avant le traitement)
+        if: github.event.inputs.enchainer == 'true'
+        env:
+          CHAINE_FINDER: ${{ github.event.inputs.chaine_finder }}
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
+          CHAINE_JETON_CONFIGURE: ${{ (vars.CHAINE_APP_ID != '' && secrets.CHAINE_APP_KEY != '') || secrets.CHAINE_TOKEN != '' }}
+        run: bash scripts/chaine.sh verifier
 
       - name: Accéder à la vidéo source
         env:
@@ -604,3 +623,30 @@ jobs:
             [ -n "$LINK" ] && echo "- Lien : $LINK" || echo "- (ce stockage ne fournit pas de lien public : ouvre le fichier depuis ton stockage)"
           } | tee -a "$GITHUB_STEP_SUMMARY"
           rclone purge "$TMP" || true
+
+      - name: Checkout des scripts de la chaîne
+        if: github.event.inputs.enchainer == 'true'
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts
+          path: repo
+
+      - name: Chaîne — jeton GitHub App
+        id: chaine_tok
+        if: github.event.inputs.enchainer == 'true' && vars.CHAINE_APP_ID != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.CHAINE_APP_ID }}
+          private-key: ${{ secrets.CHAINE_APP_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: montage-lv-final
+
+      - name: Chaîne — transmettre à Montage LV final
+        if: github.event.inputs.enchainer == 'true'
+        env:
+          CHAINE_FINDER: ${{ github.event.inputs.chaine_finder }}
+          CHAINE_GH_TOKEN: ${{ steps.chaine_tok.outputs.token || secrets.CHAINE_TOKEN }}
+          DEST: ${{ github.event.inputs.dest || vars.RCLONE_DEST }}
+          OUT_NAME: ${{ needs.prepare.outputs.out_name }}
+        run: bash repo/scripts/chaine.sh envoyer "$DEST/$OUT_NAME"

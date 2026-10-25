@@ -64,6 +64,17 @@ on:
         description: 'Durée de chaque morceau traité en parallèle, en minutes. Vide = automatique'
         required: false
         default: ''
+      enchainer:
+        description: "🔗 Chaîne : enchaîner ensuite Montage LV final puis les Shorts (Push-overlay)"
+        required: false
+        type: boolean
+        default: false
+      chaine_finder:
+        description: "🔗 Chaîne — synchro Vid-o-presse-finder. oui = son dernier lot. non = SEULEMENT tes photos/vidéos du dossier Google Drive « montage-joints » (à remplir AVANT de lancer ; vidé après le montage)"
+        required: false
+        type: choice
+        options: [oui, non]
+        default: oui
 
 jobs:
   prepare:
@@ -100,6 +111,20 @@ jobs:
             (curl -fsSL https://rclone.org/install.sh | sudo bash) || sudo apt-get install -y -qq rclone
             mkdir -p ~/.config/rclone && printf '%s\n' "$RCLONE_CONFIG_CONTENT" > ~/.config/rclone/rclone.conf
           fi
+
+      - name: Chaîne — vérifier que tout est prêt (avant le traitement)
+        if: github.event.inputs.enchainer == 'true'
+        env:
+          CHAINE_FINDER: ${{ github.event.inputs.chaine_finder }}
+          PREVIEW: ${{ github.event.inputs.preview_seconds }}
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
+          CHAINE_JETON_CONFIGURE: ${{ (vars.CHAINE_APP_ID != '' && secrets.CHAINE_APP_KEY != '') || secrets.CHAINE_TOKEN != '' }}
+        run: |
+          if [ -n "$(echo "$PREVIEW" | tr -d ' ')" ]; then
+            echo "::error title=Chaîne::« Test rapide » (preview_seconds) et « enchainer » ensemble : un extrait de test ne doit pas partir au montage. Vide preview_seconds ou décoche enchainer."
+            exit 1
+          fi
+          bash scripts/chaine.sh verifier
 
       - name: Accéder à la vidéo source
         id: src
@@ -343,6 +368,33 @@ jobs:
           path: output/
           retention-days: 14
           compression-level: 0
+
+      - name: Checkout des scripts de la chaîne
+        if: github.event.inputs.enchainer == 'true'
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts
+          path: repo
+
+      - name: Chaîne — jeton GitHub App
+        id: chaine_tok
+        if: github.event.inputs.enchainer == 'true' && vars.CHAINE_APP_ID != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.CHAINE_APP_ID }}
+          private-key: ${{ secrets.CHAINE_APP_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: montage-lv-final
+
+      - name: Chaîne — transmettre à Montage LV final
+        if: github.event.inputs.enchainer == 'true'
+        env:
+          CHAINE_FINDER: ${{ github.event.inputs.chaine_finder }}
+          CHAINE_GH_TOKEN: ${{ steps.chaine_tok.outputs.token || secrets.CHAINE_TOKEN }}
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
+          OUT_NAME: ${{ needs.prepare.outputs.out_name }}
+        run: bash repo/scripts/chaine.sh envoyer "output/$OUT_NAME"
 
       - name: Nettoyer les morceaux temporaires
         if: always()

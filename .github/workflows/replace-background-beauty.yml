@@ -1,7 +1,6 @@
-name: Replace Green Screen Background + Beauté (peau et yeux)
+name: Replace Green Screen Background + Beauté (yeux)
 
 # Même remplacement du fond vert que les autres workflows, puis, uniquement sur toi :
-#  - peau plus claire (visage, cou, mains, bras), repérée par un modèle de segmentation (vêtements, cheveux, barbe et fond exclus)
 #  - yeux recolorés (bleu clair naturel par défaut) : iris suivi image par image, pupille / reflets / paupières intacts
 #  - nettoyage des bords : mur ou plafond visibles autour du tissu vert remplacés par le fond
 # Vidéo prise dans une Release, sur Google Drive (lien ou rclone) ou via un lien direct.
@@ -26,10 +25,6 @@ on:
         description: "Nom du fichier vidéo dans cette Release (ex: video.mp4). Vide = la vidéo la plus récente de la Release"
         required: false
         default: ''
-      skin_strength:
-        description: "Peau plus claire : 0 = désactivé, 30 = discret, 60 = nettement plus claire (défaut), 90 = très claire"
-        required: false
-        default: '60'
       eye_strength:
         description: "Yeux : 0 = désactivé, 80 = naturel (défaut), 100 = maximum"
         required: false
@@ -170,10 +165,10 @@ jobs:
           python3 -m venv beauty-venv
           if ! beauty-venv/bin/pip install --quiet "mediapipe==1.1.1"; then
             beauty-venv/bin/pip install --quiet mediapipe \
-              || echo "::warning::Installation de MediaPipe impossible : la vidéo sera produite sans retouche peau / yeux."
+              || echo "::warning::Installation de MediaPipe impossible : la vidéo sera produite sans retouche des yeux."
           fi
           beauty-venv/bin/python -c "import cv2, numpy" 2>/dev/null || beauty-venv/bin/pip install --quiet numpy opencv-contrib-python-headless
-          beauty-venv/bin/python -c "import cv2; assert hasattr(cv2, 'ximgproc')" 2>/dev/null || echo "::notice::Filtre guidé absent : contours de peau un peu plus doux."
+          beauty-venv/bin/python -c "import cv2; assert hasattr(cv2, 'ximgproc')" 2>/dev/null || echo "::notice::Filtre guidé absent : contours un peu plus doux."
           # Modèles (dans le repo, sinon téléchargés)
           M=models; mkdir -p "$M"
           test -s "$M/face_landmarker.task" || curl -fsSL --retry 3 -o "$M/face_landmarker.task" \
@@ -198,7 +193,7 @@ jobs:
           VIDEO_ASSET: ${{ needs.prepare.outputs.video_asset }}
         run: bash scripts/get_source.sh open "${{ needs.prepare.outputs.mode }}"
 
-      - name: Fond remplacé + peau + yeux
+      - name: Fond remplacé + yeux
         env:
           SS: ${{ matrix.ss }}
           LEN: ${{ matrix.len }}
@@ -210,7 +205,6 @@ jobs:
           HDR: ${{ needs.prepare.outputs.hdr }}
           BG: ${{ needs.prepare.outputs.bg }}
           HAS_AUDIO: ${{ needs.prepare.outputs.has_audio }}
-          SKIN: ${{ github.event.inputs.skin_strength }}
           EYES: ${{ github.event.inputs.eye_strength }}
           EYE_COLOR: ${{ github.event.inputs.eye_color }}
           CLEAN: ${{ github.event.inputs.clean_edges }}
@@ -219,7 +213,7 @@ jobs:
           AUDIO=(); [ "$HAS_AUDIO" = "true" ] && AUDIO=(--audio-out "output/chunk_$IDX.wav")
           beauty-venv/bin/python scripts/beauty.py \
             --src "$SRC" --ss "$SS" --len "$LEN" --w "$OW" --h "$OH" --fps "$FPS" --hdr "${HDR:-false}" \
-            --bg "$BG" --key "$KEY" --skin "${SKIN:-60}" --eyes "${EYES:-80}" \
+            --bg "$BG" --key "$KEY" --skin 0 --eyes "${EYES:-80}" \
             --eye-color "${EYE_COLOR:-bleu_clair}" --clean-edges "${CLEAN:-true}" --models models \
             --out "output/chunk_$IDX.mp4" "${AUDIO[@]}"
           test -s "output/chunk_$IDX.mp4"
@@ -322,7 +316,7 @@ jobs:
           TAG="result-${{ github.run_number }}"
           gh release create "$TAG" --repo "${{ github.repository }}" \
             --title "Résultat beauté run #${{ github.run_number }}" \
-            --notes "Fond remplacé + peau + yeux, généré automatiquement. Source : $SOURCE_DESC" \
+            --notes "Fond remplacé + yeux, généré automatiquement. Source : $SOURCE_DESC" \
             output/* || gh release upload "$TAG" output/* --repo "${{ github.repository }}" --clobber
           echo "- Release : https://github.com/${{ github.repository }}/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"
 

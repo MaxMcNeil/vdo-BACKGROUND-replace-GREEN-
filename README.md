@@ -16,9 +16,9 @@ Les vidéos (volumineuses) passent par les **Releases GitHub** (jusqu'à environ
 | `.github/workflows/replace-background.yml` | Workflow principal (vidéos courtes, et aiguillage automatique) |
 | `.github/workflows/replace-background-long.yml` | Workflow des vidéos longues (lancé automatiquement, ou à la main) |
 | `.github/workflows/replace-background-assemble.yml` | Secours : recolle des morceaux déjà traités si l'étape finale a échoué |
-| `.github/workflows/replace-background-beauty.yml` | Même traitement + peau plus claire + yeux bleus (workflow séparé, optionnel) |
+| `.github/workflows/replace-background-beauty.yml` | Même traitement + yeux bleus (workflow séparé, optionnel ; la peau n'est pas retouchée) |
 | `scripts/` | Programmes du workflow Beauté (accès à la vidéo, mesure, retouche image par image) |
-| `models/` | Modèles MediaPipe de détection du visage et de la peau (licence Apache 2.0) |
+| `models/` | Modèles MediaPipe de détection du visage et de la silhouette (licence Apache 2.0) |
 | `input/background.jpg` | Image de fond pour les vidéos **horizontales** |
 | `input/background-vertical.jpg` | Image de fond pour les vidéos **verticales** |
 
@@ -133,9 +133,9 @@ Si la vidéo est dans une Release, renseigne `release_tag` et `video_asset` à l
 
 Avec le `client_id` partagé de rclone, rclone affiche l'avertissement « This remote uses rclone's shared Google Drive client_id, which is being retired and will stop working during 2026 ». Pour éviter une coupure, crée ton propre client_id en suivant https://rclone.org/drive/#making-your-own-client-id, puis refais `rclone config` et remplace le secret `RCLONE_CONFIG`.
 
-## Beauté : peau plus claire et yeux bleus (workflow séparé)
+## Beauté : yeux bleus (workflow séparé)
 
-**Replace Green Screen Background + Beauté (peau et yeux)** fait le même remplacement de fond que le workflow principal, puis retouche **uniquement toi** (le fond n'est jamais modifié). Les autres workflows ne sont pas touchés.
+**Replace Green Screen Background + Beauté (yeux)** fait le même remplacement de fond que le workflow principal, puis retouche **uniquement toi** (le fond n'est jamais modifié). Les autres workflows ne sont pas touchés.
 
 ### D'où vient la vidéo
 
@@ -151,7 +151,6 @@ Tout vide : le workflow prend tout seul la dernière vidéo mise en Release.
 
 | Champ | Rôle |
 |---|---|
-| `skin_strength` | Peau plus claire : `0` = désactivé, `30` = discret, `60` = nettement plus claire (défaut), `90` = très claire |
 | `eye_strength` | Yeux : `0` = désactivé, `80` = naturel (défaut), `100` = maximum |
 | `eye_color` | `bleu_clair` (défaut), `gris_bleu` (plus discret), `bleu_intense` ou `vert` |
 | `clean_edges` | Remplace aussi le mur / plafond visibles autour du tissu vert (défaut : oui) |
@@ -167,12 +166,11 @@ Tout vide : le workflow prend tout seul la dernière vidéo mise en Release.
 
 ### Comment c'est fait
 
-- **Peau** : un modèle de segmentation (MediaPipe « selfie multiclass ») distingue la peau du visage et du corps (cou, mains, bras) des **vêtements, cheveux, barbe et du fond**. Le masque est affiné par la couleur réelle de ta peau, mesurée sur la vidéo. Le teint est éclairci et rendu moins jaune / rouge ; les pores, rides et la netteté restent ceux d'origine. Lèvres, yeux et sourcils ne sont pas touchés.
 - **Yeux** : l'iris est suivi image par image (MediaPipe FaceLandmarker), positions lissées dans le temps. Seul l'iris **visible et plus sombre que le blanc de l'œil** est recoloré, avec un centre plus clair et un anneau extérieur plus sombre, comme un vrai œil clair. Pupille, reflets, cils et paupières restent intacts ; l'effet s'efface pendant un clignement, quand le regard est baissé, quand la tête tourne vite (image floue) et pour l'œil caché de profil.
 - **Bords** : la zone du tissu vert est mesurée ; en dehors (mur, plafond), seule ta silhouette est gardée.
 - **Toute durée** : la vidéo est découpée en morceaux traités en parallèle puis recollée (nombre exact d'images par morceau : pas de décalage du son).
-- **Premier essai** : lance avec `preview_seconds` à `15` et regarde `avant-apres.jpg`. Ajuste `skin_strength` / `eye_strength` si besoin.
-- **Dans le log** : l'étape « Fond remplacé + peau + yeux » affiche `visage détecté sur X (Y %)`. Si Y est proche de 0, les yeux ne sont pas retouchés.
+- **Premier essai** : lance avec `preview_seconds` à `15` et regarde `avant-apres.jpg`. Ajuste `eye_strength` si besoin.
+- **Dans le log** : l'étape « Fond remplacé + yeux » affiche `visage détecté sur X (Y %)`. Si Y est proche de 0, les yeux ne sont pas retouchés.
 
 ## Dépannage
 

@@ -199,6 +199,11 @@ dans **Video to Shorts** (Push-overlay). Sans la case cochée, **rien ne change*
 - Une étape en échec s'arrête net avec un message clair dans son dépôt (onglet Actions) ; après correction :
   **Re-run jobs** sur ce run — la vidéo l'attend 2 jours sur Drive. Chaque dépôt a son propre run : relancer le montage ne refait pas le fond vert.
 - « Test rapide » (Beauté, `preview_seconds`) + chaîne : refusé, pour ne pas monter un extrait de test.
+- Espace Google Drive : un résultat déjà envoyé sur ton Drive (fond vert de plus de 2 Go, ou source rclone) est
+  réutilisé tel quel, sans deuxième copie ; un montage de moins de 1,9 Go passe aux Shorts par sa release, sans Drive.
+  L'espace libre est vérifié avant chaque envoi (message clair si le Drive est presque plein).
+- Le lancement de l'étape suivante est un petit job séparé (« 🔗 Chaîne — lancer… ») : en cas d'échec,
+  « Re-run failed jobs » ne refait que ce lancement, jamais le fond vert ni le montage.
 - Aucun cron : la chaîne ne se déclenche que quand tu lances le fond vert avec la case cochée.
 
 **Mise en place (une fois, depuis le téléphone)**

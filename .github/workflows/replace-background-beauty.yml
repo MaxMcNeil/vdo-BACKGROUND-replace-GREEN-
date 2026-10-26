@@ -276,6 +276,10 @@ jobs:
     name: Recoller et publier
     needs: [prepare, chunks]
     runs-on: ubuntu-latest
+    outputs:
+      chaine_id: ${{ steps.dep.outputs.chaine_id }}
+      video_id: ${{ steps.dep.outputs.video_id }}
+      video_nom: ${{ steps.dep.outputs.video_nom }}
     steps:
       - name: Libérer de l'espace disque
         run: |
@@ -376,9 +380,42 @@ jobs:
           sparse-checkout: scripts
           path: repo
 
-      - name: Chaîne — jeton GitHub App
+      - name: Chaîne — déposer la vidéo pour le montage (Google Drive, privé)
+        id: dep
+        if: github.event.inputs.enchainer == 'true'
+        env:
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
+          OUT_NAME: ${{ needs.prepare.outputs.out_name }}
+          DEST: ${{ github.event.inputs.dest || vars.RCLONE_DEST }}
+        run: bash repo/scripts/chaine.sh deposer "output/$OUT_NAME" "${DEST:+$DEST/$OUT_NAME}"
+
+      - name: Nettoyer les morceaux temporaires
+        # seulement si tout a réussi : en cas d'échec, « Re-run failed jobs » retrouve les morceaux (gardés 1 jour)
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for id in $(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts?per_page=100" \
+                      --jq '.artifacts[] | select(.name|startswith("chunk-") or . == "source-video") | .id'); do
+            gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/$id" >/dev/null || true
+          done
+
+  # 🔗 CHAÎNE : job séparé et léger. S'il échoue (jeton, réseau…), « Re-run failed jobs » ne refait QUE ce lancement.
+  chaine:
+    name: 🔗 Chaîne — lancer Montage LV final
+    needs: [assemble]
+    if: github.event.inputs.enchainer == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout des scripts de la chaîne
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts
+
+      - name: Jeton GitHub App
         id: chaine_tok
-        if: github.event.inputs.enchainer == 'true' && vars.CHAINE_APP_ID != ''
+        if: vars.CHAINE_APP_ID != ''
         continue-on-error: true
         uses: actions/create-github-app-token@v2
         with:
@@ -387,21 +424,11 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: Montage-LV-final
 
-      - name: Chaîne — transmettre à Montage LV final
-        if: github.event.inputs.enchainer == 'true'
+      - name: Lancer Montage LV final
         env:
           CHAINE_FINDER: ${{ github.event.inputs.chaine_finder }}
           CHAINE_GH_TOKEN: ${{ steps.chaine_tok.outputs.token || secrets.CHAINE_TOKEN }}
-          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
-          OUT_NAME: ${{ needs.prepare.outputs.out_name }}
-        run: bash repo/scripts/chaine.sh envoyer "output/$OUT_NAME"
-
-      - name: Nettoyer les morceaux temporaires
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          for id in $(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts?per_page=100" \
-                      --jq '.artifacts[] | select(.name|startswith("chunk-") or . == "source-video") | .id'); do
-            gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/$id" >/dev/null || true
-          done
+          CHAINE_ID: ${{ needs.assemble.outputs.chaine_id }}
+          CHAINE_VIDEO_ID: ${{ needs.assemble.outputs.video_id }}
+          CHAINE_VIDEO_NOM: ${{ needs.assemble.outputs.video_nom }}
+        run: bash scripts/chaine.sh lancer

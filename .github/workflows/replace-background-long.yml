@@ -533,6 +533,10 @@ jobs:
   assemble:
     needs: [prepare, chunks]
     runs-on: ubuntu-latest
+    outputs:
+      chaine_id: ${{ steps.dep.outputs.chaine_id }}
+      video_id: ${{ steps.dep.outputs.video_id }}
+      video_nom: ${{ steps.dep.outputs.video_nom }}
     steps:
       - name: Libérer de l'espace disque
         run: |
@@ -631,9 +635,31 @@ jobs:
           sparse-checkout: scripts
           path: repo
 
-      - name: Chaîne — jeton GitHub App
+      - name: Chaîne — déposer la vidéo pour le montage (Google Drive, privé)
+        id: dep
+        if: github.event.inputs.enchainer == 'true'
+        env:
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
+          DEST: ${{ github.event.inputs.dest || vars.RCLONE_DEST }}
+          OUT_NAME: ${{ needs.prepare.outputs.out_name }}
+        run: bash repo/scripts/chaine.sh deposer "$DEST/$OUT_NAME"
+
+  # 🔗 CHAÎNE : job séparé et léger. S'il échoue (jeton, réseau…), « Re-run failed jobs » ne refait QUE ce lancement.
+  chaine:
+    name: 🔗 Chaîne — lancer Montage LV final
+    needs: [assemble]
+    if: github.event.inputs.enchainer == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout des scripts de la chaîne
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts
+
+      - name: Jeton GitHub App
         id: chaine_tok
-        if: github.event.inputs.enchainer == 'true' && vars.CHAINE_APP_ID != ''
+        if: vars.CHAINE_APP_ID != ''
         continue-on-error: true
         uses: actions/create-github-app-token@v2
         with:
@@ -642,11 +668,11 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: Montage-LV-final
 
-      - name: Chaîne — transmettre à Montage LV final
-        if: github.event.inputs.enchainer == 'true'
+      - name: Lancer Montage LV final
         env:
           CHAINE_FINDER: ${{ github.event.inputs.chaine_finder }}
           CHAINE_GH_TOKEN: ${{ steps.chaine_tok.outputs.token || secrets.CHAINE_TOKEN }}
-          DEST: ${{ github.event.inputs.dest || vars.RCLONE_DEST }}
-          OUT_NAME: ${{ needs.prepare.outputs.out_name }}
-        run: bash repo/scripts/chaine.sh envoyer "$DEST/$OUT_NAME"
+          CHAINE_ID: ${{ needs.assemble.outputs.chaine_id }}
+          CHAINE_VIDEO_ID: ${{ needs.assemble.outputs.video_id }}
+          CHAINE_VIDEO_NOM: ${{ needs.assemble.outputs.video_nom }}
+        run: bash scripts/chaine.sh lancer

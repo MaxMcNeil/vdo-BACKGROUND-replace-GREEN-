@@ -462,6 +462,13 @@ def analyze_cloth(src, W, H, TM, EK, n=16, seg_model=None):
             keep_wall[lab == i] = 255
     if keep_wall.max() == 0:
         return None
+    # Lisière tissu / mur : la bande de transition (mélange clair-vert, pli, ombre du bord du tissu) n'est ni assez
+    # verte pour le chromakey, ni classée « mur » → liseré clair visible. On étend le mur de quelques pixels VERS le
+    # tissu (qui y serait de toute façon transparent) : jamais sur toi (large marge), seulement près du tissu.
+    b = max(5, int(round(0.035 * w))) | 1
+    near_cloth = cv2.dilate(green.astype(np.uint8), np.ones((b, b), np.uint8)) > 0
+    grow = cv2.dilate(keep_wall, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (b, b))) > 0
+    keep_wall[grow & near_cloth & (~person)] = 255
     zone = 255 - keep_wall
     zone = cv2.resize(zone, (W, H), interpolation=cv2.INTER_LINEAR).astype(np.float32) / 255.0
     return cv2.GaussianBlur(zone, (0, 0), 2.0)

@@ -79,7 +79,7 @@ on:
 jobs:
   prepare:
     name: Préparer (source, mesure du fond, découpage)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
       n_chunks: ${{ steps.plan.outputs.n_chunks }}
@@ -98,7 +98,7 @@ jobs:
       bg: ${{ steps.plan.outputs.bg }}
     steps:
       - name: Checkout du repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Installer FFmpeg (et rclone si besoin)
         env:
@@ -138,7 +138,7 @@ jobs:
 
       - name: Garder la vidéo téléchargée pour les morceaux (lien direct / Google Drive)
         if: steps.src.outputs.mode == 'url'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: source-video
           path: input/video.mp4
@@ -166,14 +166,14 @@ jobs:
   chunks:
     name: Morceau ${{ matrix.idx }}
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       max-parallel: 16
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     steps:
       - name: Checkout du repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Installer FFmpeg, rclone et les outils de détection
         env:
@@ -204,7 +204,7 @@ jobs:
 
       - name: Récupérer la vidéo téléchargée (lien direct / Google Drive)
         if: needs.prepare.outputs.mode == 'url'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: source-video
           path: input
@@ -265,7 +265,7 @@ jobs:
           ls -la output/chunk_0.avant-apres.jpg
 
       - name: Envoyer le morceau
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: chunk-${{ matrix.idx }}
           path: output/chunk_${{ matrix.idx }}.*
@@ -275,7 +275,7 @@ jobs:
   assemble:
     name: Recoller et publier
     needs: [prepare, chunks]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       chaine_id: ${{ steps.dep.outputs.chaine_id }}
       video_id: ${{ steps.dep.outputs.video_id }}
@@ -298,7 +298,7 @@ jobs:
           fi
 
       - name: Récupérer les morceaux
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: chunk-*
           path: chunks
@@ -366,7 +366,7 @@ jobs:
           { echo "- Stockage : \`$DEST/$OUT_NAME\`"; [ -n "$LINK" ] && echo "- Lien : $LINK"; } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload du résultat en artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: video-beaute
           path: output/
@@ -375,7 +375,7 @@ jobs:
 
       - name: Checkout des scripts de la chaîne
         if: github.event.inputs.enchainer == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           sparse-checkout: scripts
           path: repo
@@ -405,11 +405,11 @@ jobs:
     name: 🔗 Chaîne — lancer Montage LV final
     needs: [assemble]
     if: github.event.inputs.enchainer == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout des scripts de la chaîne
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           sparse-checkout: scripts
 
@@ -417,9 +417,9 @@ jobs:
         id: chaine_tok
         if: vars.CHAINE_APP_ID != ''
         continue-on-error: true
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ vars.CHAINE_APP_ID }}
+          client-id: ${{ vars.CHAINE_CLIENT_ID || 'Iv23lis4ynP55Bsr8WhV' }}
           private-key: ${{ secrets.CHAINE_APP_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: Montage-LV-final

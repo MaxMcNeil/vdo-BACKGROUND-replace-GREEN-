@@ -49,10 +49,10 @@ on:
 
 jobs:
   replace-background:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout du repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Installer FFmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
@@ -367,7 +367,7 @@ jobs:
 
       - name: Upload du résultat en artifact
         if: steps.route.outputs.long != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: video-fond-remplace
           path: output/result.mp4
@@ -389,9 +389,9 @@ jobs:
         id: chaine_tok
         if: steps.route.outputs.long != 'true' && github.event.inputs.enchainer == 'true' && vars.CHAINE_APP_ID != ''
         continue-on-error: true
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ vars.CHAINE_APP_ID }}
+          client-id: ${{ vars.CHAINE_CLIENT_ID || 'Iv23lis4ynP55Bsr8WhV' }}
           private-key: ${{ secrets.CHAINE_APP_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: Montage-LV-final

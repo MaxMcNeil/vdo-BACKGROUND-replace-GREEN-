@@ -61,7 +61,7 @@ on:
 
 jobs:
   prepare:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
       key_hex: ${{ steps.plan.outputs.key_hex }}
@@ -80,7 +80,7 @@ jobs:
       out_h: ${{ steps.orient.outputs.out_h }}
     steps:
       - name: Checkout du repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Installer FFmpeg et rclone
         run: |
@@ -309,7 +309,7 @@ jobs:
 
   chunks:
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       max-parallel: 15
@@ -325,7 +325,7 @@ jobs:
       HDR: ${{ needs.prepare.outputs.hdr }}
     steps:
       - name: Checkout du repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Installer FFmpeg et rclone
         run: |
@@ -532,7 +532,7 @@ jobs:
 
   assemble:
     needs: [prepare, chunks]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       chaine_id: ${{ steps.dep.outputs.chaine_id }}
       video_id: ${{ steps.dep.outputs.video_id }}
@@ -630,7 +630,7 @@ jobs:
 
       - name: Checkout des scripts de la chaîne
         if: github.event.inputs.enchainer == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           sparse-checkout: scripts
           path: repo
@@ -649,11 +649,11 @@ jobs:
     name: 🔗 Chaîne — lancer Montage LV final
     needs: [assemble]
     if: github.event.inputs.enchainer == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout des scripts de la chaîne
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           sparse-checkout: scripts
 
@@ -661,9 +661,9 @@ jobs:
         id: chaine_tok
         if: vars.CHAINE_APP_ID != ''
         continue-on-error: true
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ vars.CHAINE_APP_ID }}
+          client-id: ${{ vars.CHAINE_CLIENT_ID || 'Iv23lis4ynP55Bsr8WhV' }}
           private-key: ${{ secrets.CHAINE_APP_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: Montage-LV-final

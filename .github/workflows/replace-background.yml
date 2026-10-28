@@ -41,7 +41,7 @@ on:
         type: boolean
         default: false
       chaine_finder:
-        description: "🔗 Chaîne — synchro Vid-o-presse-finder. oui = son dernier lot. non = SEULEMENT tes photos/vidéos du dossier Google Drive « montage-joints » (à remplir AVANT de lancer, noms libres ; vidé après le montage)"
+        description: "🔗 Chaîne — le montage cherche TOUJOURS lui-même les sources de chaque affirmation de ta vidéo (vidéos, presse, Telegram, Reddit). oui = il reprend EN PLUS le dernier lot de Vid-o-presse-finder ; non = sans ce lot. Tes photos/vidéos du dossier Drive « montage-joints » sont prises dans les deux cas (avec non, dossier vide = arrêt avant traitement)"
         required: false
         type: choice
         options: [oui, non]

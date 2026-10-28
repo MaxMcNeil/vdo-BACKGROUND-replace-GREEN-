@@ -46,6 +46,12 @@ on:
         type: choice
         options: [oui, non]
         default: oui
+      chaine_voix_studio:
+        description: "🔗 Chaîne — voix studio chaude dans Montage LV final (profondeur, clarté, volume régulier ; repli sur ta voix normale au moindre doute)"
+        required: false
+        type: choice
+        options: [non, oui]
+        default: non
 
 jobs:
   replace-background:
@@ -86,6 +92,7 @@ jobs:
         if: github.event.inputs.enchainer == 'true'
         env:
           CHAINE_FINDER: ${{ github.event.inputs.chaine_finder }}
+          CHAINE_VOIX_STUDIO: ${{ github.event.inputs.chaine_voix_studio }}
           RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
           CHAINE_JETON_CONFIGURE: ${{ (vars.CHAINE_APP_ID != '' && secrets.CHAINE_APP_KEY != '') || secrets.CHAINE_TOKEN != '' }}
         run: bash scripts/chaine.sh verifier
@@ -107,6 +114,7 @@ jobs:
           CLEAN_EDGES: ${{ github.event.inputs.clean_edges }}
           ENCHAINER: ${{ github.event.inputs.enchainer }}
           CHAINE_FINDER: ${{ github.event.inputs.chaine_finder }}
+          CHAINE_VOIX_STUDIO: ${{ github.event.inputs.chaine_voix_studio }}
         run: |
           DUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "input/video.mp4")
           echo "Durée de la vidéo : ${DUR}s (seuil vidéo longue : ${LONG_MINUTES} min)"
@@ -400,6 +408,7 @@ jobs:
         if: steps.route.outputs.long != 'true' && github.event.inputs.enchainer == 'true'
         env:
           CHAINE_FINDER: ${{ github.event.inputs.chaine_finder }}
+          CHAINE_VOIX_STUDIO: ${{ github.event.inputs.chaine_voix_studio }}
           CHAINE_GH_TOKEN: ${{ steps.chaine_tok.outputs.token || secrets.CHAINE_TOKEN }}
           RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
         run: bash scripts/chaine.sh envoyer output/result.mp4

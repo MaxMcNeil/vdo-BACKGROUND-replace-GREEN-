@@ -182,6 +182,7 @@ dans **Video to Shorts** (Push-overlay). Sans la case cochée, **rien ne change*
 |---|---|
 | `chaine_finder: oui` (défaut) | le montage reprend le **dernier lot de Vid-o-presse-finder** (+ les fichiers éventuels du dossier Drive `montage-joints`) |
 | `chaine_finder: non` | le montage prend **seulement** tes photos / vidéos du dossier Google Drive **`montage-joints`** — à remplir **avant** de lancer (noms libres). Dossier vide = arrêt immédiat, avant tout traitement |
+| `chaine_voix_studio: oui` | Montage LV final applique la **voix studio chaude** (profondeur, clarté, volume régulier ; repli automatique sur ta voix normale au moindre doute). **non** par défaut |
 
 **Où arrive quoi**
 - Fond vert : comme d'habitude (release `result-…` ou ton Drive).

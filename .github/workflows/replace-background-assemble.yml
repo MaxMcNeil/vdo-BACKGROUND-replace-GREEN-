@@ -38,6 +38,12 @@ on:
         type: choice
         options: [oui, non]
         default: oui
+      chaine_voix_studio:
+        description: "🔗 Chaîne — voix studio chaude dans Montage LV final (profondeur, clarté, volume régulier ; repli sur ta voix normale au moindre doute)"
+        required: false
+        type: choice
+        options: [non, oui]
+        default: non
 
 jobs:
   assemble:
@@ -179,6 +185,7 @@ jobs:
       - name: Lancer Montage LV final
         env:
           CHAINE_FINDER: ${{ github.event.inputs.chaine_finder }}
+          CHAINE_VOIX_STUDIO: ${{ github.event.inputs.chaine_voix_studio }}
           CHAINE_GH_TOKEN: ${{ steps.chaine_tok.outputs.token || secrets.CHAINE_TOKEN }}
           CHAINE_ID: ${{ needs.assemble.outputs.chaine_id }}
           CHAINE_VIDEO_ID: ${{ needs.assemble.outputs.video_id }}

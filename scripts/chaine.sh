@@ -131,7 +131,7 @@ PY
   [ "$OK" = 1 ] || err "Montage LV final n'a pas pu être lancé : $(tail -2 dispatch.err | tr '\n' ' '). L'app « chaine-maxmcneil » a-t-elle « Contents : Read and write » et est-elle installée sur Montage-LV-final ? Corrige puis « Re-run failed jobs »."
   { echo "### 🔗 Chaîne lancée — \`$CHAINE_ID\`"
     echo "- Vidéo transmise (privée, Google Drive) : \`${CHAINE_VIDEO_NOM:-?}\`"
-    echo "- Synchro Finder : **$FINDER**$([ "$FINDER" = non ] && echo " — photos/vidéos du dossier Drive « $JOINTS »")"
+    echo "- Vid-o-presse-finder : **$FINDER**$([ "$FINDER" = oui ] && echo " (recherche des sources de chaque affirmation + dernier lot)" || echo " (aucune recherche)") · dossier « $JOINTS » pris s'il contient des fichiers"
     echo "- Suite : [Montage LV final → Actions](https://github.com/$CIBLE_REPO/actions) puis Shorts dans Push-overlay"
     echo "- Résultats finaux : releases \`out-chaine-$CHAINE_ID\` (gardées 2 jours)"; } >> "$SUM"
   echo "::notice title=Chaîne $CHAINE_ID::Montage LV final lancé (synchro Finder : $FINDER)"
@@ -142,11 +142,9 @@ case "$ACTION" in
     rclone_pret
     [ "${CHAINE_JETON_CONFIGURE:-}" = "true" ] \
       || err "Jeton de chaîne absent : ajoute la variable CHAINE_APP_ID + le secret CHAINE_APP_KEY (GitHub App, recommandé), ou le secret CHAINE_TOKEN. Voir README, section Chaîne."
-    if [ "$FINDER" = "non" ]; then
-      N=$(rclone lsf "$REMOTE:$JOINTS" --files-only -R 2>/dev/null | grep -ciE '\.(jpe?g|png|webp|gif|bmp|heic|heif|avif|mp4|mov|mkv|webm|avi|m4v|3gp|mts)$' || true)
-      [ "${N:-0}" -gt 0 ] || err "Synchro Finder = non, mais le dossier Google Drive « $JOINTS » est vide (ou absent). Dépose tes photos / vidéos dedans, puis relance. Rien n'a été traité."
-      echo "Dossier « $JOINTS » : $N photo(s)/vidéo(s) prêtes pour le montage."
-    fi
+    # « montage-joints » est un PLUS : vide ou absent, la chaîne continue (jamais d'arrêt pour ça)
+    N=$(rclone lsf "$REMOTE:$JOINTS" --files-only -R 2>/dev/null | grep -ciE '\.(jpe?g|png|webp|gif|bmp|heic|heif|avif|mp4|mov|mkv|webm|avi|m4v|3gp|mts)$' || true)
+    echo "Dossier « $JOINTS » : ${N:-0} photo(s)/vidéo(s) en plus pour le montage$([ "${N:-0}" -gt 0 ] || echo " (vide : pas grave)")."
     LIBRE="$(drive_libre)"
     [ -n "$LIBRE" ] && echo "Google Drive : $((LIBRE / 1048576)) Mo libres."
     if [ -n "$LIBRE" ] && [ "$LIBRE" -lt 1500000000 ]; then

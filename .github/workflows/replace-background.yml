@@ -41,7 +41,7 @@ on:
         type: boolean
         default: false
       chaine_finder:
-        description: "🔗 Chaîne — le montage cherche TOUJOURS lui-même les sources de chaque affirmation de ta vidéo (vidéos, presse, Telegram, Reddit). oui = il reprend EN PLUS le dernier lot de Vid-o-presse-finder ; non = sans ce lot. Tes photos/vidéos du dossier Drive « montage-joints » sont prises dans les deux cas (avec non, dossier vide = arrêt avant traitement)"
+        description: "🔗 Chaîne — Vid-o-presse-finder. oui = le montage cherche les sources de chaque affirmation de ta vidéo (vidéos, presse, Telegram, Reddit) + reprend le dernier lot du Finder ; non = aucune recherche. Le dossier Drive « montage-joints » est un plus : pris s'il contient des fichiers, jamais bloquant s'il est vide"
         required: false
         type: choice
         options: [oui, non]

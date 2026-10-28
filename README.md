@@ -180,8 +180,8 @@ dans **Video to Shorts** (Push-overlay). Sans la case cochée, **rien ne change*
 
 | Choix au lancement | Ce qui se passe |
 |---|---|
-| `chaine_finder: oui` (défaut) | le montage reprend le **dernier lot de Vid-o-presse-finder** (+ les fichiers éventuels du dossier Drive `montage-joints`) |
-| `chaine_finder: non` | le montage prend **seulement** tes photos / vidéos du dossier Google Drive **`montage-joints`** — à remplir **avant** de lancer (noms libres). Dossier vide = arrêt immédiat, avant tout traitement |
+| `chaine_finder: oui` (défaut) | Vid-o-presse-finder **actif** : le montage cherche les sources de chaque affirmation de ta vidéo (vidéos, presse, Telegram, Reddit) et reprend le dernier lot du Finder |
+| `chaine_finder: non` | **aucune** recherche Finder. Le dossier Drive `montage-joints` reste un plus dans les deux cas : pris s'il contient des fichiers, jamais bloquant s'il est vide |
 | `chaine_voix_studio: oui` | Montage LV final applique la **voix studio chaude** (profondeur, clarté, volume régulier ; repli automatique sur ta voix normale au moindre doute). **non** par défaut |
 
 **Où arrive quoi**

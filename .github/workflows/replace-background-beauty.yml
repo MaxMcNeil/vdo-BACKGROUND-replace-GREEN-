@@ -1,7 +1,7 @@
 name: Replace Green Screen Background + Beauté (yeux)
 
 # Même remplacement du fond vert que les autres workflows, puis, uniquement sur toi :
-#  - yeux recolorés (bleu clair naturel par défaut) : iris suivi image par image, pupille / reflets / paupières intacts
+#  - yeux recolorés (gris-bleu discret par défaut, force 30) : iris suivi image par image, pupille / reflets / paupières intacts
 #  - nettoyage des bords : mur ou plafond visibles autour du tissu vert remplacés par le fond
 # Vidéo prise dans une Release, sur Google Drive (lien ou rclone) ou via un lien direct.
 # Toute durée : la vidéo est découpée en morceaux traités en parallèle, puis recollée.
@@ -26,20 +26,26 @@ on:
         required: false
         default: ''
       eye_strength:
-        description: "Yeux : 0 = désactivé, 80 = naturel (défaut), 100 = maximum"
+        description: "Yeux : 0 = désactivé (yeux naturels), 30 = discret (défaut), 80 = marqué, 100 = maximum"
         required: false
-        default: '80'
+        default: '30'
       eye_color:
         description: 'Couleur des yeux'
         required: false
         type: choice
-        default: bleu_clair
-        options: [bleu_clair, gris_bleu, bleu_intense, vert]
+        default: gris_bleu
+        options: [gris_bleu, bleu_clair, bleu_intense, vert]
       clean_edges:
         description: 'Remplacer aussi le mur / plafond visibles autour du tissu vert'
         required: false
         type: boolean
         default: true
+      vert_interieur:
+        description: "Retrait du vert sur toi : doux = plein sur les bords seulement (veste/barbe sans grain, défaut) ; plein = partout (ancien réglage)"
+        required: false
+        type: choice
+        default: doux
+        options: [doux, plein]
       preview_seconds:
         description: "Test rapide : ne traiter que les N premières secondes (ex: 15). Vide = vidéo entière"
         required: false
@@ -240,13 +246,14 @@ jobs:
           EYES: ${{ github.event.inputs.eye_strength }}
           EYE_COLOR: ${{ github.event.inputs.eye_color }}
           CLEAN: ${{ github.event.inputs.clean_edges }}
+          VERT_INT: ${{ github.event.inputs.vert_interieur }}
         run: |
           mkdir -p output
           AUDIO=(); [ "$HAS_AUDIO" = "true" ] && AUDIO=(--audio-out "output/chunk_$IDX.wav")
           beauty-venv/bin/python scripts/beauty.py \
             --src "$SRC" --ss "$SS" --len "$LEN" --w "$OW" --h "$OH" --fps "$FPS" --hdr "${HDR:-false}" \
-            --bg "$BG" --key "$KEY" --skin 0 --eyes "${EYES:-80}" \
-            --eye-color "${EYE_COLOR:-bleu_clair}" --clean-edges "${CLEAN:-true}" --models models \
+            --bg "$BG" --key "$KEY" --skin 0 --eyes "${EYES:-30}" \
+            --eye-color "${EYE_COLOR:-gris_bleu}" --clean-edges "${CLEAN:-true}" --vert-interieur "${VERT_INT:-doux}" --models models \
             --out "output/chunk_$IDX.mp4" "${AUDIO[@]}"
           test -s "output/chunk_$IDX.mp4"
           if [ "$HAS_AUDIO" = "true" ]; then test -s "output/chunk_$IDX.wav"; fi

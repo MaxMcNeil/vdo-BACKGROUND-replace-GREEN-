@@ -151,8 +151,9 @@ Tout vide : le workflow prend tout seul la dernière vidéo mise en Release.
 
 | Champ | Rôle |
 |---|---|
-| `eye_strength` | Yeux : `0` = désactivé, `80` = naturel (défaut), `100` = maximum |
-| `eye_color` | `bleu_clair` (défaut), `gris_bleu` (plus discret), `bleu_intense` ou `vert` |
+| `eye_strength` | Yeux : `0` = désactivé (yeux naturels), `30` = discret (défaut), `80` = marqué, `100` = maximum |
+| `eye_color` | `gris_bleu` (défaut, discret), `bleu_clair`, `bleu_intense` ou `vert` |
+| `vert_interieur` | `doux` (défaut) : retrait du vert plein sur les bords seulement, veste / chemise / barbe sans grain amplifié ; `plein` : partout, ancien réglage |
 | `clean_edges` | Remplace aussi le mur / plafond visibles autour du tissu vert (défaut : oui) |
 | `preview_seconds` | Test rapide : seulement les N premières secondes (ex: `15`) |
 | `background_file`, `background_file_vertical`, `key_color` | Comme le workflow principal |

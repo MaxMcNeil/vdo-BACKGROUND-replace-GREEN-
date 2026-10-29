@@ -46,40 +46,62 @@ def build_unmix_table(K, EK, THR):
     return tab.reshape(-1)
 
 
-def build_soft_table():
-    """Retrait DOUX du vert (intérieur de la personne : veste, chemise, barbe) : le reflet vert est seulement plafonné,
-    sans division ni amplification du grain. Couleurs neutres préservées (tolérance de 2 niveaux)."""
-    tab = np.empty((256, 256, 256), np.uint32)                           # index [b, g, r]
-    b, g = np.meshgrid(np.arange(256, dtype=np.float32), np.arange(256, dtype=np.float32), indexing="ij")
-    for r0 in range(256):
-        gg = np.minimum(g, (r0 + b) / 2.0 + 2.0)
-        tab[:, :, r0] = (np.uint32(r0) | (np.round(gg).astype(np.uint32) << 8) | (b.astype(np.uint32) << 16))
-    return tab.reshape(-1)
+def unmix_smooth(rgb, K, EK, THR):
+    """Retrait du vert « lissé » (intérieur de la personne : veste, chemise, barbe).
+    Même formule que le retrait habituel (unmix.cube), mais les quantités de correction sont calculées sur une image
+    légèrement floutée : la couleur MOYENNE est la même qu'avant (aucun liseré, aucune différence de teinte avec les
+    bords), mais le grain de la caméra n'est plus amplifié ni « haché » pixel par pixel.
+    rgb : image HxWx3 uint8. Renvoie une image uint8."""
+    H, W = rgb.shape[:2]
+    hw, hh = max(2, W // 2), max(2, H // 2)
+    sm = cv2.GaussianBlur(cv2.resize(rgb, (hw, hh), interpolation=cv2.INTER_AREA).astype(np.float32), (0, 0), 1.5)
+    ex = np.maximum(sm[..., 1] - (sm[..., 0] + sm[..., 2]) * 0.5, 0.0)
+    a = np.clip(1.0 - ex / np.float32(EK), 0.4, 1.0)
+    wb = smoothstep(sm.mean(axis=2), THR - 8.0, THR + 8.0)            # seuil de luminosité adouci (plus de bascule)
+    a = (1.0 - (1.0 - a) * wb).astype(np.float32)
+    inv = cv2.resize(1.0 / a, (W, H), interpolation=cv2.INTER_LINEAR)             # 1/a
+    off = cv2.resize((1.0 - a) / a, (W, H), interpolation=cv2.INTER_LINEAR)        # (1-a)/a
+    inv3, off1 = cv2.merge([inv, inv, inv]), off
+    c = cv2.multiply(rgb.astype(np.float32), inv3)
+    c -= cv2.merge([off1 * np.float32(K[0]), off1 * np.float32(K[1]), off1 * np.float32(K[2])])
+    # plafonds du vert (et du cyan) : corrections calculées sur l'image lissée, appliquées en douceur
+    cs = cv2.GaussianBlur(cv2.resize(c, (hw, hh), interpolation=cv2.INTER_AREA), (0, 0), 1.5)
+    dg = np.maximum(cs[..., 1] - (cs[..., 0] + cs[..., 2]) * 0.5, 0.0)
+    db = np.maximum(cs[..., 2] - cs[..., 0], 0.0)
+    z = np.zeros((H, W), np.float32)
+    c -= cv2.merge([z, cv2.resize(dg, (W, H), interpolation=cv2.INTER_LINEAR),
+                    cv2.resize(db, (W, H), interpolation=cv2.INTER_LINEAR)])
+    return cv2.convertScaleAbs(np.maximum(c, 0.0))                     # arrondi + bornage 0..255 -> uint8
 
 
 def edge_weight(alpha, W, H):
     """1 = bord de la découpe (contour, cheveux, zones semi-transparentes) -> retrait du vert habituel, plein ;
-    0 = intérieur de la personne -> retrait doux. Transition progressive sur ~1,2 % de la taille de l'image."""
+    0 = intérieur de la personne -> retrait lissé. Transition progressive sur ~1,2 % de la taille de l'image."""
     band = max(6.0, 0.012 * max(W, H))
     inner = (alpha >= 250).astype(np.uint8)
     dist = cv2.distanceTransform(inner, cv2.DIST_L2, 3)
     return 1.0 - smoothstep(dist, 0.5 * band, band)
 
 
-def apply_unmix_split(tab, soft_tab, rgba, W, H):
-    """Retrait plein sur les bords, doux à l'intérieur. Les pixels de bord reçoivent EXACTEMENT la même correction
-    qu'avant ; seul l'intérieur (opaque, loin du contour) change."""
-    v = rgba.view(np.uint32)[..., 0]
-    out = (soft_tab[v & 0x00FFFFFF] | (v & 0xFF000000)).view(np.uint8).reshape(rgba.shape)
+def apply_unmix_split(tab, rgba, K, EK, THR, W, H):
+    """Bords : EXACTEMENT la correction habituelle, pixel par pixel. Intérieur : même correction, lissée.
+    Seule la zone où tu te trouves est calculée (le reste est transparent)."""
+    full = apply_unmix(tab, rgba)
     alpha = rgba[..., 3]
-    e = edge_weight(alpha, W, H)
-    idx = (e > 0.002) & (alpha > 0)                                     # fond transparent : couleur sans effet, ignoré
-    if idx.any():
-        full = (tab[v[idx] & 0x00FFFFFF] | (v[idx] & 0xFF000000)).view(np.uint8).reshape(-1, 4).astype(np.float32)
-        soft = out[idx].astype(np.float32)
-        ew = e[idx][:, None]
-        out[idx] = np.clip(soft + (full - soft) * ew + 0.5, 0, 255).astype(np.uint8)
-    return out
+    rows = np.flatnonzero((alpha >= 250).any(axis=1))
+    if rows.size == 0:
+        return full
+    cols = np.flatnonzero((alpha[rows[0]:rows[-1] + 1] >= 250).any(axis=0))
+    m = 8
+    y0, y1 = max(0, rows[0] - m), min(H, rows[-1] + 1 + m)
+    x0, x1 = max(0, cols[0] - m), min(W, cols[-1] + 1 + m)
+    e = edge_weight(alpha[y0:y1, x0:x1], W, H).astype(np.float32)
+    if not (e < 0.998).any():
+        return full
+    smooth = unmix_smooth(np.ascontiguousarray(rgba[y0:y1, x0:x1, :3]), K, EK, THR)
+    fz = np.ascontiguousarray(full[y0:y1, x0:x1, :3])
+    full[y0:y1, x0:x1, :3] = cv2.blendLinear(fz, smooth, e, (1.0 - e).astype(np.float32))
+    return full
 
 
 def apply_unmix(tab, rgba):
@@ -175,7 +197,7 @@ class Beauty:
         self.eye_ref = [None, None]   # luminosité du blanc de l'oeil, lissée
         self.person_hist = []
         self.cloth = None
-        self.soft_tab = None          # table du retrait doux (None = retrait plein partout, comme avant)
+        self.smooth_key = None        # (K, EK, THR) du retrait lissé à l'intérieur (None = retrait plein partout, comme avant)
         self.last_conf = None
         self.stats = {"frames": 0, "faces": 0, "seg": 0}
         self._init_models(models)
@@ -440,12 +462,12 @@ class Beauty:
             self.euro.reset()
 
         out = None
-        if self.soft_tab is not None:                                   # bords : correction habituelle ; intérieur : douce
+        if self.smooth_key is not None:                                 # bords : correction habituelle ; intérieur : lissée
             try:
-                out = apply_unmix_split(unmix_tab, self.soft_tab, rgba, self.W, self.H)
+                out = apply_unmix_split(unmix_tab, rgba, *self.smooth_key, self.W, self.H)
             except Exception as e:                                      # jamais bloquant : retour au réglage habituel
                 if not self.stats.get("split_err"):
-                    log("::warning::Retrait doux du vert en échec (%s) : retrait plein utilisé." % str(e)[:150])
+                    log("::warning::Retrait lissé du vert en échec (%s) : retrait plein utilisé." % str(e)[:150])
                 self.stats["split_err"] = self.stats.get("split_err", 0) + 1
         if out is None:
             out = apply_unmix(unmix_tab, rgba)                          # même correction du vert que les autres workflows
@@ -556,7 +578,7 @@ def main():
     ap.add_argument("--eyes", default="30")
     ap.add_argument("--eye-color", default="gris_bleu")
     ap.add_argument("--clean-edges", default="true")
-    ap.add_argument("--vert-interieur", default="doux", help="doux = retrait du vert plein seulement sur les bords ; "
+    ap.add_argument("--vert-interieur", default="doux", help="doux = retrait habituel sur les bords, lissé à l'intérieur ; "
                     "plein = partout (ancien comportement)")
     ap.add_argument("--models", default=".")
     ap.add_argument("--out", required=True)
@@ -620,13 +642,8 @@ def main():
                 a.eye_color, a.clean_edges == "true", a.models)
     bt.set_cloth(cloth)
     if str(a.vert_interieur).strip().lower() != "plein":
-        try:
-            t0 = time.time()
-            bt.soft_tab = build_soft_table()
-            log("Retrait du vert : plein sur les bords, doux à l'intérieur (veste, chemise, barbe) (%.1f s)" % (time.time() - t0))
-        except Exception as e:
-            bt.soft_tab = None
-            log("::warning::Retrait doux indisponible (%s) : retrait plein partout, comme avant." % str(e)[:150])
+        bt.smooth_key = (K, float(EK), float(THR))
+        log("Retrait du vert : habituel sur les bords, lissé à l'intérieur (veste, chemise, barbe : même couleur, sans grain)")
     else:
         log("Retrait du vert : plein partout (ancien réglage)")
     log("Nettoyage des bords hors du tissu vert : %s" % ("oui" if bt.cloth is not None else "non (tissu sur toute l'image)"))

@@ -41,7 +41,7 @@ on:
         type: boolean
         default: true
       vert_interieur:
-        description: "Retrait du vert sur toi : doux = plein sur les bords seulement (veste/barbe sans grain, défaut) ; plein = partout (ancien réglage)"
+        description: "Retrait du vert sur toi : doux = habituel sur les bords, lissé à l’intérieur (veste/barbe sans grain, défaut) ; plein = ancien réglage partout"
         required: false
         type: choice
         default: doux

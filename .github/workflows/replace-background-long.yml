@@ -465,33 +465,40 @@ jobs:
           if [ -s edgemask.mkv ]; then EDGE_IN=(-i edgemask.mkv); MATOUT="[mat0]"; EDGE="[2:v]format=gray,setsar=1[keep]; [mat0][keep]blend=all_mode=multiply[mat];"; fi
           FILTER="
             [1:v]scale=$OW:$OH:force_original_aspect_ratio=increase,crop=$OW:$OH,setsar=1[bg];
-            [0:v]${TM}scale=$OW:$OH,setsar=1,split=2[a][c];
+            [0:v]@VF0@${TM}scale=$OW:$OH,setsar=1,split=2[a][c];
             [a]format=yuva420p,chromakey=0x$KEY_HEX:$KEY_SIM:0.06,alphaextract,erosion,erosion,erosion,boxblur=1:1$MATOUT;
             $EDGE
             @COLOR@
             [bg][fg]overlay=shortest=1:format=auto[out]
           "
 
-          # Audio du morceau en WAV sans perte (recollé sans coupure puis encodé une seule fois)
-          AUDIO_OUT=()
+          # Audio du morceau en WAV sans perte (recollé sans coupure puis encodé une seule fois) : lu à part,
+          # exactement comme avant (saut direct, précis à l'échantillon)
           if [ "$HAS_AUDIO" = "true" ]; then
-            AUDIO_OUT=(-map 0:a:0 -c:a pcm_s16le -t "$LEN" "output/chunk_$IDX.wav")
+            ffmpeg -v error -y -ss "$SS" -t "$LEN" -i "$SRC" -map 0:a:0 -vn -c:a pcm_s16le -t "$LEN" "output/chunk_$IDX.wav"
+            test -s "output/chunk_$IDX.wav"
+          fi
+          # Image : lecture du morceau identique à une lecture de la vidéo entière (pas d'image sautée / doublée
+          # au raccord). Repli : saut direct, comme avant.
+          if CS=$(python3 scripts/chunk_seek.py "$SS" "$LEN" "$FPS") && [ "$(printf '%s\n' "$CS" | wc -l)" -ge 2 ]; then
+            read -r -a VIN <<< "$(printf '%s\n' "$CS" | sed -n 1p)"; VF0=$(printf '%s\n' "$CS" | sed -n 2p)
+          else
+            echo "::warning::Calcul du raccord impossible : saut direct (comme avant)."; VIN=(-ss "$SS" -t "$LEN"); VF0=""
           fi
 
           VI_MODE="${VERT_INT:-doux}"; [ "$VI_MODE" = plein ] || VI_MODE=doux
           echo "Retrait du vert sur toi : $VI_MODE"
           for VI_TRY in "$VI_MODE" plein; do
             COLOR=$(bash scripts/vert_interieur.sh "$VI_TRY" "$OW" "$OH")
-            F="${FILTER/@COLOR@/"$COLOR"}"
+            F="${FILTER/@COLOR@/"$COLOR"}"; F="${F/@VF0@/"$VF0"}"
             if ffmpeg -y \
-              -ss "$SS" -t "$LEN" -i "$SRC" \
+              "${VIN[@]}" -i "$SRC" \
               -framerate "$FPS" -loop 1 -i "$BG" \
               "${EDGE_IN[@]}" \
               -filter_complex "$F" \
               -map "[out]" \
               -c:v libx264 -preset slow -crf 17 -pix_fmt yuv420p -r "$FPS" -fps_mode cfr \
-              -t "$LEN" "output/chunk_$IDX.mp4" \
-              "${AUDIO_OUT[@]}"; then break; fi
+              -t "$LEN" "output/chunk_$IDX.mp4"; then break; fi
             [ "$VI_TRY" = plein ] && exit 1
             echo "::warning::Retrait lissé du vert en échec : relance avec le réglage habituel (plein)."
           done
@@ -519,33 +526,40 @@ jobs:
           if [ -s edgemask.mkv ]; then EDGE_IN=(-i edgemask.mkv); MATOUT="[mat0]"; EDGE="[2:v]format=gray,setsar=1[keep]; [mat0][keep]blend=all_mode=multiply[mat];"; fi
           FILTER="
             [1:v]scale=$OW:$OH:force_original_aspect_ratio=increase,crop=$OW:$OH,setsar=1[bg];
-            [0:v]${TM}scale=$OW:$OH,setsar=1,split=2[a][c];
+            [0:v]@VF0@${TM}scale=$OW:$OH,setsar=1,split=2[a][c];
             [a]format=yuva420p,chromakey=0x$KEY_HEX:$KEY_SIM:0.06,alphaextract,erosion,erosion,erosion,boxblur=1:1$MATOUT;
             $EDGE
             @COLOR@
             [bg][fg]overlay=shortest=1:format=auto[out]
           "
 
-          # Audio du morceau en WAV sans perte (recollé sans coupure puis encodé une seule fois)
-          AUDIO_OUT=()
+          # Audio du morceau en WAV sans perte (recollé sans coupure puis encodé une seule fois) : lu à part,
+          # exactement comme avant (saut direct, précis à l'échantillon)
           if [ "$HAS_AUDIO" = "true" ]; then
-            AUDIO_OUT=(-map 0:a:0 -c:a pcm_s16le -t "$LEN" "output/chunk_$IDX.wav")
+            ffmpeg -v error -y -ss "$SS" -t "$LEN" -i "$SRC" -map 0:a:0 -vn -c:a pcm_s16le -t "$LEN" "output/chunk_$IDX.wav"
+            test -s "output/chunk_$IDX.wav"
+          fi
+          # Image : lecture du morceau identique à une lecture de la vidéo entière (pas d'image sautée / doublée
+          # au raccord). Repli : saut direct, comme avant.
+          if CS=$(python3 scripts/chunk_seek.py "$SS" "$LEN" "$FPS") && [ "$(printf '%s\n' "$CS" | wc -l)" -ge 2 ]; then
+            read -r -a VIN <<< "$(printf '%s\n' "$CS" | sed -n 1p)"; VF0=$(printf '%s\n' "$CS" | sed -n 2p)
+          else
+            echo "::warning::Calcul du raccord impossible : saut direct (comme avant)."; VIN=(-ss "$SS" -t "$LEN"); VF0=""
           fi
 
           VI_MODE="${VERT_INT:-doux}"; [ "$VI_MODE" = plein ] || VI_MODE=doux
           echo "Retrait du vert sur toi : $VI_MODE"
           for VI_TRY in "$VI_MODE" plein; do
             COLOR=$(bash scripts/vert_interieur.sh "$VI_TRY" "$OW" "$OH")
-            F="${FILTER/@COLOR@/"$COLOR"}"
+            F="${FILTER/@COLOR@/"$COLOR"}"; F="${F/@VF0@/"$VF0"}"
             if ffmpeg -y \
-              -ss "$SS" -t "$LEN" -i "$SRC" \
+              "${VIN[@]}" -i "$SRC" \
               -framerate "$FPS" -loop 1 -i "$BG" \
               "${EDGE_IN[@]}" \
               -filter_complex "$F" \
               -map "[out]" \
               -c:v libx264 -preset slow -crf 17 -pix_fmt yuv420p -r "$FPS" -fps_mode cfr \
-              -t "$LEN" "output/chunk_$IDX.mp4" \
-              "${AUDIO_OUT[@]}"; then break; fi
+              -t "$LEN" "output/chunk_$IDX.mp4"; then break; fi
             [ "$VI_TRY" = plein ] && exit 1
             echo "::warning::Retrait lissé du vert en échec : relance avec le réglage habituel (plein)."
           done

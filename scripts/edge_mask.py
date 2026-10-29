@@ -17,6 +17,25 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from beauty import analyze_cloth, smoothstep, log  # noqa: E402
 
 
+
+try:                                    # une seule version du calcul, partagée avec edge_mask.py et le workflow long
+    from chunk_seek import chunk_input  # noqa: E402
+except ImportError:                     # repli : copie identique
+    def chunk_input(ss, ln, fps_str, fps):
+        try:
+            s = float(ss or 0)
+        except ValueError:
+            s = 0.0
+        pre = max(0.0, s - 1.0)
+        args = ["-copyts"] + (["-ss", "%.6f" % pre] if pre > 0 else [])
+        if ln:
+            args += ["-t", "%.6f" % (float(ln) + (s - pre) + 1.0)]
+        vf = "fps=%s:start_time=0," % fps_str
+        if s > 0:
+            vf += "trim=start=%.6f," % max(0.0, s - 0.5 / fps)
+        vf += "setpts=PTS-STARTPTS,"
+        return args, vf
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--src", required=True)
@@ -56,8 +75,9 @@ def main():
     seek = ["-ss", a.ss] if a.ss not in ("", "0", "0.0") else []
     dur = ["-t", a.len] if a.len else []
     # Mêmes filtres que la composition (même nombre d'images), mais lu directement en petite taille
-    cmd_in = ["ffmpeg", "-v", "error", *seek, *dur, "-i", a.src, "-vf",
-              "%sscale=%d:%d,setsar=1,fps=%s,scale=%d:%d:flags=area,format=rgb24" % (TM, W, H, a.fps, sw, sh),
+    in_args, vf0 = chunk_input(a.ss, a.len, a.fps, fps)   # mêmes images que la composition, au raccord près
+    cmd_in = ["ffmpeg", "-v", "error", *in_args, "-i", a.src, "-vf",
+              vf0 + "%sscale=%d:%d,setsar=1,fps=%s,scale=%d:%d:flags=area,format=rgb24" % (TM, W, H, a.fps, sw, sh),
               "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
     cmd_out = ["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "gray", "-s", "%dx%d" % (W, H),
                "-framerate", a.fps, "-i", "-", "-c:v", "ffv1", "-pix_fmt", "gray", a.out]

@@ -16,6 +16,25 @@ import numpy as np
 import cv2
 
 # ---------------------------------------------------------------- utilitaires
+
+try:                                    # une seule version du calcul, partagée avec edge_mask.py et le workflow long
+    from chunk_seek import chunk_input  # noqa: E402
+except ImportError:                     # repli : copie identique
+    def chunk_input(ss, ln, fps_str, fps):
+        try:
+            s = float(ss or 0)
+        except ValueError:
+            s = 0.0
+        pre = max(0.0, s - 1.0)
+        args = ["-copyts"] + (["-ss", "%.6f" % pre] if pre > 0 else [])
+        if ln:
+            args += ["-t", "%.6f" % (float(ln) + (s - pre) + 1.0)]
+        vf = "fps=%s:start_time=0," % fps_str
+        if s > 0:
+            vf += "trim=start=%.6f," % max(0.0, s - 0.5 / fps)
+        vf += "setpts=PTS-STARTPTS,"
+        return args, vf
+
 def smoothstep(x, a, b):
     t = np.clip((x - a) / float(b - a), 0.0, 1.0)
     return t * t * (3.0 - 2.0 * t)
@@ -622,10 +641,11 @@ def main():
 
     seek = ["-ss", a.ss] if a.ss not in ("", "0", "0.0") else []
     dur = ["-t", a.len] if a.len else []
-    fc_in = ("[0:v]%sscale=%d:%d,setsar=1,fps=%s,split=2[a][c];"
+    in_args, vf0 = chunk_input(a.ss, a.len, a.fps, fps)
+    fc_in = ("[0:v]" + vf0 + "%sscale=%d:%d,setsar=1,fps=%s,split=2[a][c];"
              "[a]format=yuva420p,chromakey=0x%s:%s:0.06,alphaextract,erosion,erosion,erosion,boxblur=1:1[mat];"
              "[c]format=rgba[cl];[cl][mat]alphamerge,format=rgba[o]") % (TM, W, H, a.fps, HEX, SIM)
-    cmd_in = ["ffmpeg", "-v", "error", *seek, *dur, "-i", a.src, "-filter_complex", fc_in, "-map", "[o]",
+    cmd_in = ["ffmpeg", "-v", "error", *in_args, "-i", a.src, "-filter_complex", fc_in, "-map", "[o]",
               "-f", "rawvideo", "-pix_fmt", "rgba", "-"]
     fc_out = ("[1:v]scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d,setsar=1[bg];"
               "[0:v]setsar=1[fg];[bg][fg]overlay=shortest=1:format=auto[out]") % (W, H, W, H)

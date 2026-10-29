@@ -193,7 +193,8 @@ class Beauty:
         self.ear_hist = []            # ouverture habituelle de TES yeux (référence pour clignements / regard baissé)
         self.prev_c = [None, None]    # position précédente des iris (flou de mouvement)
         # lissage dans le temps (anti-scintillement) : force de l'effet et luminosités de référence, par oeil
-        self.eye_w = [0.0, 0.0]
+        self.eye_w = [None, None]     # None = pas encore vu : la 1re image prend directement la bonne force
+                                      # (pas de fondu au début de chaque morceau ni aux raccords)
         self.eye_ref = [None, None]   # luminosité du blanc de l'oeil, lissée
         self.person_hist = []
         self.cloth = None
@@ -356,8 +357,11 @@ class Beauty:
             w = weight * wts[k] * fade * self.eye_s if width > 6 else 0.0
             # la force suit la cible en douceur : apparition progressive (~0,15 s), disparition plus rapide
             # (clignement, mouvement brusque) -> plus d'allumage / extinction sec d'une image à l'autre
-            rate = EYE_SMOOTH if w > self.eye_w[k] else EYE_FADE
-            self.eye_w[k] += rate * (w - self.eye_w[k])
+            if self.eye_w[k] is None:
+                self.eye_w[k] = w
+            else:
+                rate = EYE_SMOOTH if w > self.eye_w[k] else EYE_FADE
+                self.eye_w[k] += rate * (w - self.eye_w[k])
             if self.eye_w[k] > 0.01 and width > 6:
                 self.one_eye(out, lm[eye_idx], lm[iris_idx[0]], r, self.eye_w[k], k)
 

@@ -71,6 +71,12 @@ Si le tissu vert ne remplit pas toute l'image (mur blanc visible sur les côtés
 - en dehors, seule ta silhouette est gardée (un bras tendu au-dessus du mur reste visible), repérée par un modèle de segmentation ;
 - si le tissu remplit l'image, ou en cas de problème, rien ne change : la vidéo est traitée exactement comme avant. Mets `clean_edges` à non pour le désactiver.
 
+## Retrait du vert sur toi (`vert_interieur`, tous les workflows)
+
+- `doux` (défaut) : sur le **contour** (bords, zones semi-transparentes), le retrait du reflet vert est exactement celui d'avant. À **l'intérieur** (veste, chemise, barbe), la même correction est calculée sur une image adoucie : même couleur qu'avant, mais le grain de la caméra n'est plus amplifié (fini le grésillement sur les tissus gris-vert).
+- `plein` : ancien réglage partout.
+- En cas de problème avec `doux`, la vidéo est automatiquement refaite avec `plein` (message dans le journal).
+
 ## Réglages automatiques
 
 Avant le traitement, le workflow mesure ton fond vert :

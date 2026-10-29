@@ -43,6 +43,12 @@ on:
         required: false
         type: boolean
         default: true
+      vert_interieur:
+        description: "Retrait du vert sur toi : doux = habituel sur les bords, lissé à l’intérieur (veste/barbe sans grain, défaut) ; plein = ancien réglage partout"
+        required: false
+        type: choice
+        default: doux
+        options: [doux, plein]
       chunk_minutes:
         description: 'Durée de chaque morceau en minutes (traités en parallèle). Vide = automatique (environ 12 morceaux, de 3 à 10 minutes)'
         required: false
@@ -447,6 +453,7 @@ jobs:
           BGH: ${{ github.event.inputs.background_file }}
           OWV: ${{ needs.prepare.outputs.out_w }}
           OHV: ${{ needs.prepare.outputs.out_h }}
+          VERT_INT: ${{ github.event.inputs.vert_interieur }}
         run: |
           mkdir -p output
           BG="input/${BGH:-background.jpg}"
@@ -461,8 +468,7 @@ jobs:
             [0:v]${TM}scale=$OW:$OH,setsar=1,split=2[a][c];
             [a]format=yuva420p,chromakey=0x$KEY_HEX:$KEY_SIM:0.06,alphaextract,erosion,erosion,erosion,boxblur=1:1$MATOUT;
             $EDGE
-            [c]format=gbrp,lut3d=file=unmix.cube:interp=tetrahedral,format=rgba[cl];
-            [cl][mat]alphamerge[fg];
+            @COLOR@
             [bg][fg]overlay=shortest=1:format=auto[out]
           "
 
@@ -472,15 +478,23 @@ jobs:
             AUDIO_OUT=(-map 0:a:0 -c:a pcm_s16le -t "$LEN" "output/chunk_$IDX.wav")
           fi
 
-          ffmpeg -y \
-            -ss "$SS" -t "$LEN" -i "$SRC" \
-            -framerate "$FPS" -loop 1 -i "$BG" \
-            "${EDGE_IN[@]}" \
-            -filter_complex "$FILTER" \
-            -map "[out]" \
-            -c:v libx264 -preset slow -crf 17 -pix_fmt yuv420p -r "$FPS" -fps_mode cfr \
-            -t "$LEN" "output/chunk_$IDX.mp4" \
-            "${AUDIO_OUT[@]}"
+          VI_MODE="${VERT_INT:-doux}"; [ "$VI_MODE" = plein ] || VI_MODE=doux
+          echo "Retrait du vert sur toi : $VI_MODE"
+          for VI_TRY in "$VI_MODE" plein; do
+            COLOR=$(bash scripts/vert_interieur.sh "$VI_TRY" "$OW" "$OH")
+            F="${FILTER/@COLOR@/"$COLOR"}"
+            if ffmpeg -y \
+              -ss "$SS" -t "$LEN" -i "$SRC" \
+              -framerate "$FPS" -loop 1 -i "$BG" \
+              "${EDGE_IN[@]}" \
+              -filter_complex "$F" \
+              -map "[out]" \
+              -c:v libx264 -preset slow -crf 17 -pix_fmt yuv420p -r "$FPS" -fps_mode cfr \
+              -t "$LEN" "output/chunk_$IDX.mp4" \
+              "${AUDIO_OUT[@]}"; then break; fi
+            [ "$VI_TRY" = plein ] && exit 1
+            echo "::warning::Retrait lissé du vert en échec : relance avec le réglage habituel (plein)."
+          done
 
       - name: Composer le morceau VERTICAL (même traitement, format portrait)
         if: needs.prepare.outputs.vertical == 'true'
@@ -493,6 +507,7 @@ jobs:
           BGV: ${{ github.event.inputs.background_file_vertical }}
           OWV: ${{ needs.prepare.outputs.out_w }}
           OHV: ${{ needs.prepare.outputs.out_h }}
+          VERT_INT: ${{ github.event.inputs.vert_interieur }}
         run: |
           mkdir -p output
           BG="input/${BGV:-background-vertical.jpg}"
@@ -507,8 +522,7 @@ jobs:
             [0:v]${TM}scale=$OW:$OH,setsar=1,split=2[a][c];
             [a]format=yuva420p,chromakey=0x$KEY_HEX:$KEY_SIM:0.06,alphaextract,erosion,erosion,erosion,boxblur=1:1$MATOUT;
             $EDGE
-            [c]format=gbrp,lut3d=file=unmix.cube:interp=tetrahedral,format=rgba[cl];
-            [cl][mat]alphamerge[fg];
+            @COLOR@
             [bg][fg]overlay=shortest=1:format=auto[out]
           "
 
@@ -518,15 +532,23 @@ jobs:
             AUDIO_OUT=(-map 0:a:0 -c:a pcm_s16le -t "$LEN" "output/chunk_$IDX.wav")
           fi
 
-          ffmpeg -y \
-            -ss "$SS" -t "$LEN" -i "$SRC" \
-            -framerate "$FPS" -loop 1 -i "$BG" \
-            "${EDGE_IN[@]}" \
-            -filter_complex "$FILTER" \
-            -map "[out]" \
-            -c:v libx264 -preset slow -crf 17 -pix_fmt yuv420p -r "$FPS" -fps_mode cfr \
-            -t "$LEN" "output/chunk_$IDX.mp4" \
-            "${AUDIO_OUT[@]}"
+          VI_MODE="${VERT_INT:-doux}"; [ "$VI_MODE" = plein ] || VI_MODE=doux
+          echo "Retrait du vert sur toi : $VI_MODE"
+          for VI_TRY in "$VI_MODE" plein; do
+            COLOR=$(bash scripts/vert_interieur.sh "$VI_TRY" "$OW" "$OH")
+            F="${FILTER/@COLOR@/"$COLOR"}"
+            if ffmpeg -y \
+              -ss "$SS" -t "$LEN" -i "$SRC" \
+              -framerate "$FPS" -loop 1 -i "$BG" \
+              "${EDGE_IN[@]}" \
+              -filter_complex "$F" \
+              -map "[out]" \
+              -c:v libx264 -preset slow -crf 17 -pix_fmt yuv420p -r "$FPS" -fps_mode cfr \
+              -t "$LEN" "output/chunk_$IDX.mp4" \
+              "${AUDIO_OUT[@]}"; then break; fi
+            [ "$VI_TRY" = plein ] && exit 1
+            echo "::warning::Retrait lissé du vert en échec : relance avec le réglage habituel (plein)."
+          done
 
       - name: Envoyer le morceau sur le stockage externe
         env:

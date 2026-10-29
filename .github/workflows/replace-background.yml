@@ -31,6 +31,12 @@ on:
         required: false
         type: boolean
         default: true
+      vert_interieur:
+        description: "Retrait du vert sur toi : doux = habituel sur les bords, lissé à l’intérieur (veste/barbe sans grain, défaut) ; plein = ancien réglage partout"
+        required: false
+        type: choice
+        default: doux
+        options: [doux, plein]
       force_single:
         description: "Mettre 'true' pour forcer le traitement normal même si la vidéo est longue"
         required: false
@@ -115,6 +121,7 @@ jobs:
           ENCHAINER: ${{ github.event.inputs.enchainer }}
           CHAINE_FINDER: ${{ github.event.inputs.chaine_finder }}
           CHAINE_VOIX_STUDIO: ${{ github.event.inputs.chaine_voix_studio }}
+          VERT_INT: ${{ github.event.inputs.vert_interieur }}
         run: |
           DUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "input/video.mp4")
           echo "Durée de la vidéo : ${DUR}s (seuil vidéo longue : ${LONG_MINUTES} min)"
@@ -128,6 +135,7 @@ jobs:
             [ -n "$KEY_COLOR" ] && ARGS+=(-f "key_color=$KEY_COLOR")
             ARGS+=(-f "clean_edges=${CLEAN_EDGES:-true}")
             ARGS+=(-f "enchainer=${ENCHAINER:-false}" -f "chaine_finder=${CHAINE_FINDER:-oui}")
+            ARGS+=(-f "chaine_voix_studio=${CHAINE_VOIX_STUDIO:-non}" -f "vert_interieur=${VERT_INT:-doux}")
             if gh workflow run replace-background-long.yml --repo "${{ github.repository }}" "${ARGS[@]}"; then
               echo "long=true" >> "$GITHUB_OUTPUT"
               echo "::notice::Vidéo longue : traitement lancé dans le workflow 'vidéos longues' (onglet Actions). Le résultat sera envoyé sur ton stockage externe."
@@ -299,6 +307,7 @@ jobs:
           BGH: ${{ steps.files.outputs.bg }}
           OWV: ${{ steps.orient.outputs.out_w }}
           OHV: ${{ steps.orient.outputs.out_h }}
+          VERT_INT: ${{ github.event.inputs.vert_interieur }}
           FPSV: ${{ steps.orient.outputs.fps }}
           HDR: ${{ steps.orient.outputs.hdr }}
         run: |
@@ -318,20 +327,27 @@ jobs:
             [0:v]${TM}scale=$OW:$OH,setsar=1,split=2[a][c];
             [a]format=yuva420p,chromakey=0x$KEY_HEX:$KEY_SIM:0.06,alphaextract,erosion,erosion,erosion,boxblur=1:1$MATOUT;
             $EDGE
-            [c]format=gbrp,lut3d=file=unmix.cube:interp=tetrahedral,format=rgba[cl];
-            [cl][mat]alphamerge[fg];
+            @COLOR@
             [bg][fg]overlay=shortest=1:format=auto[out]
           "
 
-          ffmpeg -y \
-            -i "input/video.mp4" \
-            -framerate "$FPS" -loop 1 -i "$BG" \
-            "${EDGE_IN[@]}" \
-            -filter_complex "$FILTER" \
-            -map "[out]" -map 0:a? \
-            -c:v libx264 -preset slow -crf 17 -pix_fmt yuv420p \
-            -c:a aac -b:a 192k \
-            output/result.mp4
+          VI_MODE="${VERT_INT:-doux}"; [ "$VI_MODE" = plein ] || VI_MODE=doux
+          echo "Retrait du vert sur toi : $VI_MODE"
+          for VI_TRY in "$VI_MODE" plein; do
+            COLOR=$(bash scripts/vert_interieur.sh "$VI_TRY" "$OW" "$OH")
+            F="${FILTER/@COLOR@/"$COLOR"}"
+            if ffmpeg -y \
+              -i "input/video.mp4" \
+              -framerate "$FPS" -loop 1 -i "$BG" \
+              "${EDGE_IN[@]}" \
+              -filter_complex "$F" \
+              -map "[out]" -map 0:a? \
+              -c:v libx264 -preset slow -crf 17 -pix_fmt yuv420p \
+              -c:a aac -b:a 192k \
+              output/result.mp4; then break; fi
+            [ "$VI_TRY" = plein ] && exit 1
+            echo "::warning::Retrait lissé du vert en échec : relance avec le réglage habituel (plein)."
+          done
 
       - name: Composer la vidéo VERTICALE (même traitement, format portrait)
         if: steps.route.outputs.long != 'true' && steps.orient.outputs.vertical == 'true'
@@ -339,6 +355,7 @@ jobs:
           BGV: ${{ github.event.inputs.background_file_vertical }}
           OWV: ${{ steps.orient.outputs.out_w }}
           OHV: ${{ steps.orient.outputs.out_h }}
+          VERT_INT: ${{ github.event.inputs.vert_interieur }}
           FPSV: ${{ steps.orient.outputs.fps }}
           HDR: ${{ steps.orient.outputs.hdr }}
         run: |
@@ -358,20 +375,27 @@ jobs:
             [0:v]${TM}scale=$OW:$OH,setsar=1,split=2[a][c];
             [a]format=yuva420p,chromakey=0x$KEY_HEX:$KEY_SIM:0.06,alphaextract,erosion,erosion,erosion,boxblur=1:1$MATOUT;
             $EDGE
-            [c]format=gbrp,lut3d=file=unmix.cube:interp=tetrahedral,format=rgba[cl];
-            [cl][mat]alphamerge[fg];
+            @COLOR@
             [bg][fg]overlay=shortest=1:format=auto[out]
           "
 
-          ffmpeg -y \
-            -i "input/video.mp4" \
-            -framerate "$FPS" -loop 1 -i "$BG" \
-            "${EDGE_IN[@]}" \
-            -filter_complex "$FILTER" \
-            -map "[out]" -map 0:a? \
-            -c:v libx264 -preset slow -crf 17 -pix_fmt yuv420p \
-            -c:a aac -b:a 192k \
-            output/result.mp4
+          VI_MODE="${VERT_INT:-doux}"; [ "$VI_MODE" = plein ] || VI_MODE=doux
+          echo "Retrait du vert sur toi : $VI_MODE"
+          for VI_TRY in "$VI_MODE" plein; do
+            COLOR=$(bash scripts/vert_interieur.sh "$VI_TRY" "$OW" "$OH")
+            F="${FILTER/@COLOR@/"$COLOR"}"
+            if ffmpeg -y \
+              -i "input/video.mp4" \
+              -framerate "$FPS" -loop 1 -i "$BG" \
+              "${EDGE_IN[@]}" \
+              -filter_complex "$F" \
+              -map "[out]" -map 0:a? \
+              -c:v libx264 -preset slow -crf 17 -pix_fmt yuv420p \
+              -c:a aac -b:a 192k \
+              output/result.mp4; then break; fi
+            [ "$VI_TRY" = plein ] && exit 1
+            echo "::warning::Retrait lissé du vert en échec : relance avec le réglage habituel (plein)."
+          done
 
       - name: Upload du résultat en artifact
         if: steps.route.outputs.long != 'true'

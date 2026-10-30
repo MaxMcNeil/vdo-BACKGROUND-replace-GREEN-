@@ -32,12 +32,6 @@ on:
         required: false
         type: boolean
         default: false
-      chaine_finder:
-        description: "🔗 Chaîne — Vid-o-presse-finder. oui = recherche SELON TA VIDÉO (sources de chaque affirmation : vidéos, presse, Telegram, Reddit) + EN PLUS le dernier lot que tu as lancé toi-même ; non = aucune recherche. Le dossier Drive « montage-joints » est un plus : pris s'il contient des fichiers, jamais bloquant s'il est vide"
-        required: false
-        type: choice
-        options: [oui, non]
-        default: oui
       chaine_voix_studio:
         description: "🔗 Chaîne — voix studio chaude dans Montage LV final (profondeur, clarté, volume régulier ; repli sur ta voix normale au moindre doute)"
         required: false
@@ -201,7 +195,6 @@ jobs:
 
       - name: Lancer Montage LV final
         env:
-          CHAINE_FINDER: ${{ github.event.inputs.chaine_finder }}
           CHAINE_VOIX_STUDIO: ${{ github.event.inputs.chaine_voix_studio }}
           CHAINE_SHORTS_SOUS_TITRES: ${{ github.event.inputs.chaine_shorts_sous_titres }}
           CHAINE_GH_TOKEN: ${{ steps.chaine_tok.outputs.token || secrets.CHAINE_TOKEN }}

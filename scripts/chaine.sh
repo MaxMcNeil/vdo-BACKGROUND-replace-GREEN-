@@ -13,18 +13,17 @@
 #                                        Job séparé : en cas d'échec, « Re-run failed jobs » ne refait QUE ce lancement.
 #   chaine.sh envoyer <vidéo> [drive]  → deposer + lancer (workflow principal, un seul job).
 #
-# Variables : CHAINE_FINDER (oui|non), CHAINE_VOIX_STUDIO (non|oui, défaut non), CHAINE_SHORTS_SOUS_TITRES (oui|non), RCLONE_CONFIG_CONTENT, CHAINE_GH_TOKEN (jeton GitHub App ou CHAINE_TOKEN),
+# Variables : CHAINE_VOIX_STUDIO (non|oui, défaut non), CHAINE_SHORTS_SOUS_TITRES (oui|non), RCLONE_CONFIG_CONTENT, CHAINE_GH_TOKEN (jeton GitHub App ou CHAINE_TOKEN),
 #             CHAINE_JOINTS (dossier Drive des photos/vidéos, défaut montage-joints), GITHUB_* (fournies par Actions)
 # Ménage : fichiers de chaine/ de plus de 2 jours supprimés définitivement (pas de corbeille) à chaque dépôt.
 set -euo pipefail
 ACTION="${1:-}"
 CIBLE_REPO="${CHAINE_MONTAGE_REPO:-MaxMcNeil/Montage-LV-final}"
 JOINTS="${CHAINE_JOINTS:-montage-joints}"
-FINDER="$(printf '%s' "${CHAINE_FINDER:-oui}" | tr 'A-Z' 'a-z')"
+FINDER=non   # 🔒 recherche automatique désactivée : tu fournis toi-même articles, vidéos, photos (montage-joints)
 VOIX="$(printf '%s' "${CHAINE_VOIX_STUDIO:-non}" | tr 'A-Z' 'a-z')"
 SHORTS_ST="$(printf '%s' "${CHAINE_SHORTS_SOUS_TITRES:-oui}" | tr 'A-Z' 'a-z')"; [ "$SHORTS_ST" = non ] || SHORTS_ST=oui
 case "$VOIX" in oui|yes|true|1) VOIX=oui;; *) VOIX=non;; esac   # tout autre valeur = non (défaut sûr)
-case "$FINDER" in non|no|false|0) FINDER=non;; *) FINDER=oui;; esac
 SUM="${GITHUB_STEP_SUMMARY:-/dev/stdout}"
 err() { echo "::error title=Chaîne::$*"; { echo "### ❌ Chaîne arrêtée"; echo "$*"; } >> "$SUM"; exit 1; }
 out() { echo "$1=$2" >> "${GITHUB_OUTPUT:-/dev/null}"; }
@@ -132,10 +131,10 @@ PY
   [ "$OK" = 1 ] || err "Montage LV final n'a pas pu être lancé : $(tail -2 dispatch.err | tr '\n' ' '). L'app « chaine-maxmcneil » a-t-elle « Contents : Read and write » et est-elle installée sur Montage-LV-final ? Corrige puis « Re-run failed jobs »."
   { echo "### 🔗 Chaîne lancée — \`$CHAINE_ID\`"
     echo "- Vidéo transmise (privée, Google Drive) : \`${CHAINE_VIDEO_NOM:-?}\`"
-    echo "- Vid-o-presse-finder : **$FINDER**$([ "$FINDER" = oui ] && echo " (recherche des sources de chaque affirmation + dernier lot)" || echo " (aucune recherche)") · dossier « $JOINTS » pris s'il contient des fichiers"
+    echo "- 🔒 Recherche automatique désactivée : seuls TES fichiers du dossier Drive « $JOINTS » (photos, vidéos, captures d'articles) sont montés"
     echo "- Suite : [Montage LV final → Actions](https://github.com/$CIBLE_REPO/actions) puis Shorts dans Push-overlay"
     echo "- Résultats finaux : releases \`out-chaine-$CHAINE_ID\` (gardées 2 jours)"; } >> "$SUM"
-  echo "::notice title=Chaîne $CHAINE_ID::Montage LV final lancé (synchro Finder : $FINDER)"
+  echo "::notice title=Chaîne $CHAINE_ID::Montage LV final lancé (pièces jointes : dossier « $JOINTS »)"
 }
 
 case "$ACTION" in
@@ -151,7 +150,7 @@ case "$ACTION" in
     if [ -n "$LIBRE" ] && [ "$LIBRE" -lt 1500000000 ]; then
       echo "::warning title=Chaîne::Google Drive presque plein ($((LIBRE / 1048576)) Mo libres) : un résultat de plus de 2 Go ne pourra pas être transmis. Libère de la place si la vidéo est longue."
     fi
-    { echo "### 🔗 Chaîne activée"; echo "Fond vert → Montage LV final (synchro Finder : **$FINDER**) → Shorts."
+    { echo "### 🔗 Chaîne activée"; echo "Fond vert → Montage LV final (tes pièces jointes : dossier « $JOINTS ») → Shorts."
       [ -n "$LIBRE" ] && echo "Google Drive : $((LIBRE / 1048576)) Mo libres."; } >> "$SUM"
     ;;
   deposer) deposer "${2:-}" "${3:-}";;

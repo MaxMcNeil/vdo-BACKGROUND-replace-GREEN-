@@ -70,6 +70,12 @@ on:
         type: choice
         options: [non, oui]
         default: non
+      chaine_shorts_sous_titres:
+        description: "🔗 Chaîne — sous-titres dans les Shorts (gros, lisibles, jamais sur ton visage) : oui / non"
+        required: false
+        type: choice
+        default: oui
+        options: [oui, non]
 
 jobs:
   prepare:
@@ -117,6 +123,7 @@ jobs:
         env:
           CHAINE_FINDER: ${{ github.event.inputs.chaine_finder }}
           CHAINE_VOIX_STUDIO: ${{ github.event.inputs.chaine_voix_studio }}
+          CHAINE_SHORTS_SOUS_TITRES: ${{ github.event.inputs.chaine_shorts_sous_titres }}
           RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
           CHAINE_JETON_CONFIGURE: ${{ (vars.CHAINE_APP_ID != '' && secrets.CHAINE_APP_KEY != '') || secrets.CHAINE_TOKEN != '' }}
         run: bash scripts/chaine.sh verifier
@@ -739,6 +746,7 @@ jobs:
         env:
           CHAINE_FINDER: ${{ github.event.inputs.chaine_finder }}
           CHAINE_VOIX_STUDIO: ${{ github.event.inputs.chaine_voix_studio }}
+          CHAINE_SHORTS_SOUS_TITRES: ${{ github.event.inputs.chaine_shorts_sous_titres }}
           CHAINE_GH_TOKEN: ${{ steps.chaine_tok.outputs.token || secrets.CHAINE_TOKEN }}
           CHAINE_ID: ${{ needs.assemble.outputs.chaine_id }}
           CHAINE_VIDEO_ID: ${{ needs.assemble.outputs.video_id }}

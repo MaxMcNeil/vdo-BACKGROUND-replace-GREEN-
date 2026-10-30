@@ -58,6 +58,12 @@ on:
         type: choice
         options: [non, oui]
         default: non
+      chaine_shorts_sous_titres:
+        description: "🔗 Chaîne — sous-titres dans les Shorts (gros, lisibles, jamais sur ton visage) : oui / non"
+        required: false
+        type: choice
+        default: oui
+        options: [oui, non]
 
 jobs:
   replace-background:
@@ -99,6 +105,7 @@ jobs:
         env:
           CHAINE_FINDER: ${{ github.event.inputs.chaine_finder }}
           CHAINE_VOIX_STUDIO: ${{ github.event.inputs.chaine_voix_studio }}
+          CHAINE_SHORTS_SOUS_TITRES: ${{ github.event.inputs.chaine_shorts_sous_titres }}
           RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
           CHAINE_JETON_CONFIGURE: ${{ (vars.CHAINE_APP_ID != '' && secrets.CHAINE_APP_KEY != '') || secrets.CHAINE_TOKEN != '' }}
         run: bash scripts/chaine.sh verifier
@@ -121,6 +128,7 @@ jobs:
           ENCHAINER: ${{ github.event.inputs.enchainer }}
           CHAINE_FINDER: ${{ github.event.inputs.chaine_finder }}
           CHAINE_VOIX_STUDIO: ${{ github.event.inputs.chaine_voix_studio }}
+          CHAINE_SHORTS_SOUS_TITRES: ${{ github.event.inputs.chaine_shorts_sous_titres }}
           VERT_INT: ${{ github.event.inputs.vert_interieur }}
         run: |
           DUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "input/video.mp4")
@@ -135,7 +143,7 @@ jobs:
             [ -n "$KEY_COLOR" ] && ARGS+=(-f "key_color=$KEY_COLOR")
             ARGS+=(-f "clean_edges=${CLEAN_EDGES:-true}")
             ARGS+=(-f "enchainer=${ENCHAINER:-false}" -f "chaine_finder=${CHAINE_FINDER:-oui}")
-            ARGS+=(-f "chaine_voix_studio=${CHAINE_VOIX_STUDIO:-non}" -f "vert_interieur=${VERT_INT:-doux}")
+            ARGS+=(-f "chaine_voix_studio=${CHAINE_VOIX_STUDIO:-non}" -f "chaine_shorts_sous_titres=${CHAINE_SHORTS_SOUS_TITRES:-oui}" -f "vert_interieur=${VERT_INT:-doux}")
             if gh workflow run replace-background-long.yml --repo "${{ github.repository }}" "${ARGS[@]}"; then
               echo "long=true" >> "$GITHUB_OUTPUT"
               echo "::notice::Vidéo longue : traitement lancé dans le workflow 'vidéos longues' (onglet Actions). Le résultat sera envoyé sur ton stockage externe."
@@ -436,6 +444,7 @@ jobs:
         env:
           CHAINE_FINDER: ${{ github.event.inputs.chaine_finder }}
           CHAINE_VOIX_STUDIO: ${{ github.event.inputs.chaine_voix_studio }}
+          CHAINE_SHORTS_SOUS_TITRES: ${{ github.event.inputs.chaine_shorts_sous_titres }}
           CHAINE_GH_TOKEN: ${{ steps.chaine_tok.outputs.token || secrets.CHAINE_TOKEN }}
           RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
         run: bash scripts/chaine.sh envoyer output/result.mp4

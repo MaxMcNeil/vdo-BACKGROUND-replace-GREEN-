@@ -190,6 +190,7 @@ dans **Video to Shorts** (Push-overlay). Sans la case cochée, **rien ne change*
 | `chaine_finder: oui` (défaut) | Vid-o-presse-finder **actif** : le montage cherche les sources de chaque affirmation de ta vidéo (vidéos, presse, Telegram, Reddit) et reprend le dernier lot du Finder |
 | `chaine_finder: non` | **aucune** recherche Finder. Le dossier Drive `montage-joints` reste un plus dans les deux cas : pris s'il contient des fichiers, jamais bloquant s'il est vide |
 | `chaine_voix_studio: oui` | Montage LV final applique la **voix studio chaude** (profondeur, clarté, volume régulier ; repli automatique sur ta voix normale au moindre doute). **non** par défaut |
+| `chaine_shorts_sous_titres` | Sous-titres dans les **Shorts** de la chaîne : **oui** par défaut (gros, très lisibles, jamais sur ton visage ni sous les boutons des applis) ; **non** = Shorts sans sous-titres |
 
 **Où arrive quoi**
 - Fond vert : comme d'habitude (release `result-…` ou ton Drive).

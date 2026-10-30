@@ -13,7 +13,7 @@
 #                                        Job séparé : en cas d'échec, « Re-run failed jobs » ne refait QUE ce lancement.
 #   chaine.sh envoyer <vidéo> [drive]  → deposer + lancer (workflow principal, un seul job).
 #
-# Variables : CHAINE_FINDER (oui|non), CHAINE_VOIX_STUDIO (non|oui, défaut non), RCLONE_CONFIG_CONTENT, CHAINE_GH_TOKEN (jeton GitHub App ou CHAINE_TOKEN),
+# Variables : CHAINE_FINDER (oui|non), CHAINE_VOIX_STUDIO (non|oui, défaut non), CHAINE_SHORTS_SOUS_TITRES (oui|non), RCLONE_CONFIG_CONTENT, CHAINE_GH_TOKEN (jeton GitHub App ou CHAINE_TOKEN),
 #             CHAINE_JOINTS (dossier Drive des photos/vidéos, défaut montage-joints), GITHUB_* (fournies par Actions)
 # Ménage : fichiers de chaine/ de plus de 2 jours supprimés définitivement (pas de corbeille) à chaque dépôt.
 set -euo pipefail
@@ -22,6 +22,7 @@ CIBLE_REPO="${CHAINE_MONTAGE_REPO:-MaxMcNeil/Montage-LV-final}"
 JOINTS="${CHAINE_JOINTS:-montage-joints}"
 FINDER="$(printf '%s' "${CHAINE_FINDER:-oui}" | tr 'A-Z' 'a-z')"
 VOIX="$(printf '%s' "${CHAINE_VOIX_STUDIO:-non}" | tr 'A-Z' 'a-z')"
+SHORTS_ST="$(printf '%s' "${CHAINE_SHORTS_SOUS_TITRES:-oui}" | tr 'A-Z' 'a-z')"; [ "$SHORTS_ST" = non ] || SHORTS_ST=oui
 case "$VOIX" in oui|yes|true|1) VOIX=oui;; *) VOIX=non;; esac   # tout autre valeur = non (défaut sûr)
 case "$FINDER" in non|no|false|0) FINDER=non;; *) FINDER=oui;; esac
 SUM="${GITHUB_STEP_SUMMARY:-/dev/stdout}"
@@ -116,12 +117,12 @@ lancer() {
   [ -n "${CHAINE_ID:-}" ] && [ -n "${CHAINE_VIDEO_ID:-}" ] || err "bon de livraison incomplet (identifiant de chaîne ou de vidéo manquant)"
   [ -n "${CHAINE_GH_TOKEN:-}" ] || err "Jeton de chaîne indisponible (GitHub App : variable CHAINE_APP_ID + secret CHAINE_APP_KEY, ou secret CHAINE_TOKEN). Le fond vert est publié ; corrige puis « Re-run failed jobs » (seul ce lancement est refait)."
   local ORIGINE="https://github.com/${GITHUB_REPOSITORY:-?}/actions/runs/${GITHUB_RUN_ID:-0}" OK=0 i
-  python3 - "$CHAINE_ID" "$CHAINE_VIDEO_ID" "${CHAINE_VIDEO_NOM:-video.mp4}" "$FINDER" "$JOINTS" "$ORIGINE" "$VOIX" > bon-montage.json <<'PY'
+  python3 - "$CHAINE_ID" "$CHAINE_VIDEO_ID" "${CHAINE_VIDEO_NOM:-video.mp4}" "$FINDER" "$JOINTS" "$ORIGINE" "$VOIX" "$SHORTS_ST" > bon-montage.json <<'PY'
 import json, sys
-i, fid, nom, finder, joints, origine, voix = sys.argv[1:8]
+i, fid, nom, finder, joints, origine, voix, shorts_st = sys.argv[1:9]
 print(json.dumps({"event_type": "chaine-montage", "client_payload": {
     "v": 1, "chaine_id": i, "video_id": fid, "video_nom": nom, "finder": finder,
-    "joints": joints, "origine": origine, "voix_studio": voix}}, ensure_ascii=False))
+    "joints": joints, "origine": origine, "voix_studio": voix, "shorts_sous_titres": shorts_st}}, ensure_ascii=False))
 PY
   cat bon-montage.json
   for i in 1 2 3 4 5; do

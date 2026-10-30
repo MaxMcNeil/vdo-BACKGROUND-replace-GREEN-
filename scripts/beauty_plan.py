@@ -144,6 +144,7 @@ out = {
     "fps": fps, "has_audio": has_audio, "vertical": "true" if vertical else "false",
     "out_w": ow, "out_h": oh, "hdr": "true" if hdr else "false",
     "out_name": base + ("_beaute-test.mp4" if pv > 0 else "_beaute.mp4"),
+    "duree": "%.1f" % total,
 }
 with open(os.environ["GITHUB_OUTPUT"], "a") as o:
     for k, v in out.items():

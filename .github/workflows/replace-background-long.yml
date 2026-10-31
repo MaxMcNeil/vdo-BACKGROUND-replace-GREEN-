@@ -49,6 +49,10 @@ on:
         type: choice
         default: doux
         options: [doux, plein]
+      vitesse:
+        description: "⏩ Vitesse de la vidéo (ta voix garde sa hauteur) : 1 = normale (défaut) ; 1.1 = 10 % plus rapide pour un rythme plus vif ; de 0.8 à 1.5"
+        required: false
+        default: "1"
       chunk_minutes:
         description: 'Durée de chaque morceau en minutes (traités en parallèle). Vide = automatique (environ 12 morceaux, de 3 à 10 minutes)'
         required: false
@@ -576,6 +580,16 @@ jobs:
             [ "$VI_TRY" = plein ] && exit 1
             echo "::warning::Retrait lissé du vert en échec : relance avec le réglage habituel (plein)."
           done
+
+      - name: Vitesse du morceau (si différente de 1)
+        if: github.event.inputs.vitesse != '' && github.event.inputs.vitesse != '1'
+        env:
+          IDX: ${{ matrix.idx }}
+          VITESSE: ${{ github.event.inputs.vitesse }}
+          FPSV: ${{ needs.prepare.outputs.fps }}
+        run: |
+          A="output/chunk_$IDX.wav"; [ -s "$A" ] || A=-
+          bash scripts/vitesse.sh "output/chunk_$IDX.mp4" "$A" "$VITESSE" "${FPSV:-30}"
 
       - name: Envoyer le morceau sur le stockage externe
         env:

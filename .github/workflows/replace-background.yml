@@ -37,6 +37,10 @@ on:
         type: choice
         default: doux
         options: [doux, plein]
+      vitesse:
+        description: "⏩ Vitesse de la vidéo (ta voix garde sa hauteur) : 1 = normale (défaut) ; 1.1 = 10 % plus rapide pour un rythme plus vif ; de 0.8 à 1.5"
+        required: false
+        default: "1"
       force_single:
         description: "Mettre 'true' pour forcer le traitement normal même si la vidéo est longue"
         required: false
@@ -122,6 +126,7 @@ jobs:
           CHAINE_VOIX_STUDIO: ${{ github.event.inputs.chaine_voix_studio }}
           CHAINE_SHORTS_SOUS_TITRES: ${{ github.event.inputs.chaine_shorts_sous_titres }}
           VERT_INT: ${{ github.event.inputs.vert_interieur }}
+          VITESSE: ${{ github.event.inputs.vitesse }}
         run: |
           DUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "input/video.mp4")
           echo "Durée de la vidéo : ${DUR}s (seuil vidéo longue : ${LONG_MINUTES} min)"
@@ -135,7 +140,7 @@ jobs:
             [ -n "$KEY_COLOR" ] && ARGS+=(-f "key_color=$KEY_COLOR")
             ARGS+=(-f "clean_edges=${CLEAN_EDGES:-true}")
             ARGS+=(-f "enchainer=${ENCHAINER:-false}")
-            ARGS+=(-f "chaine_voix_studio=${CHAINE_VOIX_STUDIO:-non}" -f "chaine_shorts_sous_titres=${CHAINE_SHORTS_SOUS_TITRES:-oui}" -f "vert_interieur=${VERT_INT:-doux}")
+            ARGS+=(-f "chaine_voix_studio=${CHAINE_VOIX_STUDIO:-non}" -f "chaine_shorts_sous_titres=${CHAINE_SHORTS_SOUS_TITRES:-oui}" -f "vert_interieur=${VERT_INT:-doux}" -f "vitesse=${VITESSE:-1}")
             if gh workflow run replace-background-long.yml --repo "${{ github.repository }}" "${ARGS[@]}"; then
               echo "long=true" >> "$GITHUB_OUTPUT"
               echo "::notice::Vidéo longue : traitement lancé dans le workflow 'vidéos longues' (onglet Actions). Le résultat sera envoyé sur ton stockage externe."
@@ -396,6 +401,13 @@ jobs:
             [ "$VI_TRY" = plein ] && exit 1
             echo "::warning::Retrait lissé du vert en échec : relance avec le réglage habituel (plein)."
           done
+
+      - name: Vitesse (si différente de 1)
+        if: steps.route.outputs.long != 'true' && github.event.inputs.vitesse != '' && github.event.inputs.vitesse != '1'
+        env:
+          VITESSE: ${{ github.event.inputs.vitesse }}
+          FPSV: ${{ steps.orient.outputs.fps }}
+        run: bash scripts/vitesse.sh output/result.mp4 - "$VITESSE" "${FPSV:-30}"
 
       - name: Upload du résultat en artifact
         if: steps.route.outputs.long != 'true'

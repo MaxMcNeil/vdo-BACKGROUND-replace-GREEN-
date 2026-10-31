@@ -46,6 +46,10 @@ on:
         type: choice
         default: doux
         options: [doux, plein]
+      vitesse:
+        description: "⏩ Vitesse de la vidéo (ta voix garde sa hauteur) : 1 = normale (défaut) ; 1.1 = 10 % plus rapide pour un rythme plus vif ; de 0.8 à 1.5"
+        required: false
+        default: "1"
       preview_seconds:
         description: "Test rapide : ne traiter que les N premières secondes (ex: 15). Vide = vidéo entière"
         required: false
@@ -289,6 +293,16 @@ jobs:
           FILT+="[r0][r1][r2]vstack=3"
           ffmpeg -v error -y "${ARGS[@]}" -filter_complex "$FILT" -frames:v 1 -q:v 3 output/chunk_0.avant-apres.jpg
           ls -la output/chunk_0.avant-apres.jpg
+
+      - name: Vitesse du morceau (si différente de 1)
+        if: github.event.inputs.vitesse != '' && github.event.inputs.vitesse != '1'
+        env:
+          IDX: ${{ matrix.idx }}
+          VITESSE: ${{ github.event.inputs.vitesse }}
+          FPSV: ${{ needs.prepare.outputs.fps }}
+        run: |
+          A="output/chunk_$IDX.wav"; [ -s "$A" ] || A=-
+          bash scripts/vitesse.sh "output/chunk_$IDX.mp4" "$A" "$VITESSE" "${FPSV:-30}"
 
       - name: Envoyer le morceau
         uses: actions/upload-artifact@v6

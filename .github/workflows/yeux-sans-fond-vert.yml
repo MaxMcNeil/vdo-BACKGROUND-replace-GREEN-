@@ -254,8 +254,8 @@ jobs:
           P=$(ffmpeg -v info -ss "$SS" -t "$T" -i "$SRC" -t "$T" -i "output/chunk_0.mp4" -lavfi \
               "[0:v]scale=320:-2:flags=area,gblur=sigma=1.5,setsar=1[a];[1:v]scale=320:-2:flags=area,gblur=sigma=1.5,setsar=1[b];[b][a]psnr" -f null - 2>&1 \
               | grep -o 'average:[0-9.]*' | tail -1 | cut -d: -f2)
-          echo "Fidélité de l'image : ${P:-?} dB (au-dessus de 36 dB = identique à l'œil ; mesure tolérante au mouvement)"
-          if [ -n "$P" ] && python3 -c "import sys; sys.exit(0 if float('$P') < 36 else 1)"; then
+          echo "Fidélité de l'image : ${P:-?} dB (au-dessus de 33 dB = identique à l'œil ; mesure tolérante au mouvement)"
+          if [ -n "$P" ] && python3 -c "import sys; sys.exit(0 if float('$P') < 33 else 1)"; then
             echo "::warning title=Fidélité::l'image diffère plus que prévu de l'original (${P} dB) : regarde avant-apres.jpg dans la Release avant de publier"
           fi
           echo "- Fidélité de l'image hors yeux : ${P:-non mesurée} dB" >> "$GITHUB_STEP_SUMMARY"

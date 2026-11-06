@@ -493,7 +493,8 @@ class Beauty:
                     log("::warning::Retrait lissé du vert en échec (%s) : retrait plein utilisé." % str(e)[:150])
                 self.stats["split_err"] = self.stats.get("split_err", 0) + 1
         if out is None:
-            out = apply_unmix(unmix_tab, rgba)                          # même correction du vert que les autres workflows
+            # sans fond vert : image d'origine intacte ; sinon même correction du vert que les autres workflows
+            out = rgba.copy() if unmix_tab is None else apply_unmix(unmix_tab, rgba)
         if conf is not None and self.skin_s > 0:
             small_out = cv2.resize(out, (self.sw, self.sh), interpolation=cv2.INTER_AREA)[..., :3].astype(np.float32) / 255.0
             lab_s = cv2.cvtColor(small_out, cv2.COLOR_RGB2Lab)
@@ -595,8 +596,10 @@ def main():
     ap.add_argument("--h", type=int, required=True)
     ap.add_argument("--fps", required=True)
     ap.add_argument("--hdr", default="false")
-    ap.add_argument("--bg", required=True)
-    ap.add_argument("--key", required=True, help="R,G,B,EK,SIM,THR,HEX")
+    ap.add_argument("--bg", default="")
+    ap.add_argument("--key", default="", help="R,G,B,EK,SIM,THR,HEX")
+    ap.add_argument("--sans-vert", default="false", help="true = vidéo SANS fond vert : seuls les yeux changent, "
+                    "tout le reste de l'image est gardé tel quel (aucun détourage, aucun fond, couleurs d'origine)")
     ap.add_argument("--skin", default="60")
     ap.add_argument("--eyes", default="30")
     ap.add_argument("--eye-color", default="gris_bleu")
@@ -617,7 +620,15 @@ def main():
             log("::warning::Valeur '%s' non comprise : %s utilisé." % (txt, default))
             return float(default)
     a.skin, a.eyes = num(a.skin, 60), num(a.eyes, 30)
-    R, G, B, EK, SIM, THR, HEX = a.key.split(",")
+    sans_vert = str(a.sans_vert).strip().lower() == "true"
+    if sans_vert:
+        R = G = B = 0
+        EK, SIM, THR, HEX = "20", "0.1", "100", "000000"
+        a.clean_edges = "false"
+    else:
+        if not a.key or not a.bg:
+            ap.error("--key et --bg sont nécessaires (sauf avec --sans-vert true)")
+        R, G, B, EK, SIM, THR, HEX = a.key.split(",")
     K = (float(R), float(G), float(B))
     W, H = a.w, a.h
     f_num, f_den = (a.fps.split("/") + ["1"])[:2]
@@ -636,8 +647,9 @@ def main():
             cv2.imwrite(os.path.join(a.debug_frames, "zone_tissu.png"), (cloth * 255).astype(np.uint8))
 
     t0 = time.time()
-    tab = build_unmix_table(K, float(EK), float(THR))
-    log("Table de dé-mélange prête (%.1f s)" % (time.time() - t0))
+    tab = None if sans_vert else build_unmix_table(K, float(EK), float(THR))
+    if tab is not None:
+        log("Table de dé-mélange prête (%.1f s)" % (time.time() - t0))
 
     seek = ["-ss", a.ss] if a.ss not in ("", "0", "0.0") else []
     dur = ["-t", a.len] if a.len else []
@@ -645,6 +657,19 @@ def main():
     fc_in = ("[0:v]" + vf0 + "%sscale=%d:%d,setsar=1,fps=%s,split=2[a][c];"
              "[a]format=yuva420p,chromakey=0x%s:%s:0.06,alphaextract,erosion,erosion,erosion,boxblur=1:1[mat];"
              "[c]format=rgba[cl];[cl][mat]alphamerge,format=rgba[o]") % (TM, W, H, a.fps, HEX, SIM)
+    if sans_vert:
+        # couleurs EXACTEMENT celles d'origine : conversion image <-> pixels avec la bonne matrice dans les deux sens
+        mat = "bt709"
+        if not TM:
+            try:
+                cs = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=color_space",
+                                     "-of", "csv=p=0", a.src], capture_output=True, text=True, timeout=60).stdout.strip()
+                mat = "bt601" if cs in ("bt470bg", "smpte170m", "bt601") else ("bt709" if cs in ("bt709", "") or max(W, H) >= 1000 else "bt601")
+            except Exception:
+                mat = "bt709"
+        fc_in = ("[0:v]" + vf0 + "%sscale=%d:%d:flags=lanczos+accurate_rnd+full_chroma_int:in_color_matrix=%s,setsar=1,fps=%s,format=rgba[o]") % (
+            TM, W, H, mat, a.fps)
+        log("Sans fond vert : seuls les yeux sont retouchés, le reste de l'image est gardé tel quel (couleurs %s)" % mat)
     cmd_in = ["ffmpeg", "-v", "error", *in_args, "-i", a.src, "-filter_complex", fc_in, "-map", "[o]",
               "-f", "rawvideo", "-pix_fmt", "rgba", "-"]
     fc_out = ("[1:v]scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d,setsar=1[bg];"
@@ -655,6 +680,13 @@ def main():
                "-filter_complex", fc_out, "-map", "[out]",
                "-c:v", "libx264", "-preset", a.preset, "-crf", "17", "-pix_fmt", "yuv420p", "-r", a.fps, "-fps_mode", "cfr",
                a.out]
+    if sans_vert:   # aucune image de fond : l'image retouchée est encodée telle quelle, couleurs bt709 déclarées
+        cmd_out = ["ffmpeg", "-v", "error", "-y",
+                   "-f", "rawvideo", "-pix_fmt", "rgba", "-s", "%dx%d" % (W, H), "-framerate", a.fps, "-i", "-",
+                   "-vf", "scale=flags=bicubic+accurate_rnd+full_chroma_int:out_color_matrix=bt709:out_range=tv,format=yuv420p",
+                   "-c:v", "libx264", "-preset", a.preset, "-crf", "17", "-pix_fmt", "yuv420p", "-r", a.fps, "-fps_mode", "cfr",
+                   "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv",
+                   a.out]
     if a.audio_out:
         has_audio = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index",
                                     "-of", "csv=p=0", a.src], capture_output=True, text=True).stdout.strip()
@@ -665,12 +697,15 @@ def main():
     bt = Beauty(W, H, fps, max(0.0, min(a.skin, 150.0)) / 100.0, max(0.0, min(a.eyes, 100.0)) / 100.0,
                 a.eye_color, a.clean_edges == "true", a.models)
     bt.set_cloth(cloth)
-    if str(a.vert_interieur).strip().lower() != "plein":
+    if sans_vert:
+        pass
+    elif str(a.vert_interieur).strip().lower() != "plein":
         bt.smooth_key = (K, float(EK), float(THR))
         log("Retrait du vert : habituel sur les bords, lissé à l'intérieur (veste, chemise, barbe : même couleur, sans grain)")
     else:
         log("Retrait du vert : plein partout (ancien réglage)")
-    log("Nettoyage des bords hors du tissu vert : %s" % ("oui" if bt.cloth is not None else "non (tissu sur toute l'image)"))
+    if not sans_vert:
+        log("Nettoyage des bords hors du tissu vert : %s" % ("oui" if bt.cloth is not None else "non (tissu sur toute l'image)"))
     pin = subprocess.Popen(cmd_in, stdout=subprocess.PIPE)
     pout = subprocess.Popen(cmd_out, stdin=subprocess.PIPE)
     fsize = W * H * 4
@@ -693,7 +728,7 @@ def main():
             except Exception as e:                                      # une image difficile ne bloque jamais la vidéo
                 if n < 3 or n % 500 == 0:
                     log("::warning::Image %d non retouchée (%s)" % (n, str(e)[:150]))
-                res = apply_unmix(tab, fr)
+                res = fr.copy() if tab is None else apply_unmix(tab, fr)
             pout.stdin.write(np.ascontiguousarray(res).tobytes())
             if dbg and n % max(1, int(round(fps * 2))) == 0:
                 cv2.imwrite(os.path.join(dbg, "f%05d_avant.jpg" % n), cv2.cvtColor(fr[..., :3], cv2.COLOR_RGB2BGR))

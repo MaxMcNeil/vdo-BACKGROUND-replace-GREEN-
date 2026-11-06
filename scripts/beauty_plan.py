@@ -80,8 +80,12 @@ def uvmag(r, g, b):
     return math.hypot(u, v)
 
 
+SANS_VERT = (os.environ.get("SANS_VERT") or "").strip().lower() == "true"
 override = os.environ.get("KEY_OVERRIDE", "").strip().lstrip("#").upper()
-if len(override) == 6:
+if SANS_VERT:                             # vidéo SANS fond vert : aucune mesure de fond (rien n'est détouré)
+    R, G, B = 0, 0, 0
+    print("Sans fond vert : aucune mesure du fond, seuls les yeux seront retouchés")
+elif len(override) == 6:
     R, G, B = [int(override[i:i + 2], 16) for i in (0, 2, 4)]
     print("Couleur imposée manuellement :", override)
 else:
@@ -143,7 +147,8 @@ out = {
     "key": "%d,%d,%d,%.2f,%.3f,%.1f,%s" % (R, G, B, EK, SIM, THR, hexk),
     "fps": fps, "has_audio": has_audio, "vertical": "true" if vertical else "false",
     "out_w": ow, "out_h": oh, "hdr": "true" if hdr else "false",
-    "out_name": base + ("_beaute-test.mp4" if pv > 0 else "_beaute.mp4"),
+    "out_name": base + (("_yeux-test.mp4" if pv > 0 else "_yeux.mp4") if SANS_VERT
+                        else ("_beaute-test.mp4" if pv > 0 else "_beaute.mp4")),
     "duree": "%.1f" % total,
 }
 with open(os.environ["GITHUB_OUTPUT"], "a") as o:

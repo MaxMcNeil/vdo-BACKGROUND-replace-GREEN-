@@ -4,7 +4,7 @@ name: État
 # Ne modifie aucun autre workflow. Commit seulement si l'état change.
 on:
   workflow_run:
-    workflows: ["Recoller des morceaux déjà traités (secours)", "Replace Green Screen Background + Beauté (yeux)", "Replace Green Screen Background (vidéos longues)", "Replace Green Screen Background"]
+    workflows: ["Recoller des morceaux déjà traités (secours)", "Replace Green Screen Background + Beauté (yeux)", "Replace Green Screen Background (vidéos longues)", "Replace Green Screen Background", "Yeux bleus — vidéo SANS fond vert"]
     types: [completed]
   workflow_dispatch:      # aucune exécution planifiée : seulement après tes propres lancements, ou à la main
 

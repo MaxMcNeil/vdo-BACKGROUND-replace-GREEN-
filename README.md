@@ -17,6 +17,7 @@ Les vidéos (volumineuses) passent par les **Releases GitHub** (jusqu'à environ
 | `.github/workflows/replace-background-long.yml` | Workflow des vidéos longues (lancé automatiquement, ou à la main) |
 | `.github/workflows/replace-background-assemble.yml` | Secours : recolle des morceaux déjà traités si l'étape finale a échoué |
 | `.github/workflows/replace-background-beauty.yml` | Même traitement + yeux bleus (workflow séparé, optionnel ; la peau n'est pas retouchée) |
+| `.github/workflows/yeux-sans-fond-vert.yml` | **Vidéo SANS fond vert** : seulement les yeux (même retouche que Beauté), reste de l'image d'origine ; vitesse et chaîne comme les autres |
 | `scripts/` | Programmes du workflow Beauté (accès à la vidéo, mesure, retouche image par image) |
 | `models/` | Modèles MediaPipe de détection du visage et de la silhouette (licence Apache 2.0) |
 | `input/background.jpg` | Image de fond pour les vidéos **horizontales** |

@@ -142,10 +142,12 @@ lancer() {
   python3 - "$CHAINE_ID" "$CHAINE_VIDEO_ID" "${CHAINE_VIDEO_NOM:-video.mp4}" "$FINDER" "$JOINTS" "$ORIGINE" "$VOIX" "$SHORTS_ST" "$FORMAT" "$RECH" > bon-montage.json <<'PY'
 import json, sys
 i, fid, nom, finder, joints, origine, voix, shorts_st, fmt, rech = sys.argv[1:11]
-print(json.dumps({"event_type": "chaine-montage", "client_payload": {
-    "v": 1, "chaine_id": i, "video_id": fid, "video_nom": nom, "finder": finder,
-    "joints": joints, "origine": origine, "voix_studio": voix, "shorts_sous_titres": shorts_st,
-    "fond_dir": "chaine/" + i, "format_sortie": fmt, "recherche": rech}}, ensure_ascii=False))
+# GitHub n'accepte que 10 réglages au premier niveau : les réglages ajoutés vont dans « opts » (jamais de dépassement)
+p = {"v": 2, "chaine_id": i, "video_id": fid, "video_nom": nom, "joints": joints, "origine": origine,
+     "voix_studio": voix, "shorts_sous_titres": shorts_st,
+     "opts": {"finder": finder, "fond_dir": "chaine/" + i, "format_sortie": fmt, "recherche": rech}}
+assert len(p) <= 10
+print(json.dumps({"event_type": "chaine-montage", "client_payload": p}, ensure_ascii=False))
 PY
   cat bon-montage.json
   for i in 1 2 3 4 5; do

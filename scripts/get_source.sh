@@ -154,7 +154,37 @@ download_release() {
   BASENAME="${VIDEO_ASSET%.*}"
 }
 
+detect_joints() {   # source vide : ta vidéo « moi… » la plus récente du dossier Drive montage-joints (comme le Montage)
+  [ -s ~/.config/rclone/rclone.conf ] && command -v rclone >/dev/null || return 1
+  local REM JD="${JOINTS_DIR:-montage-joints}" F
+  REM="$(rclone listremotes --long 2>/dev/null | awk -F: '$2 ~ /drive/ {print $1; exit}')"
+  [ -n "$REM" ] || REM="$(rclone listremotes 2>/dev/null | head -1 | tr -d ':')"
+  [ -n "$REM" ] || return 1
+  F="$(rclone lsjson "$REM:$JD" --files-only -R --no-mimetype 2>/dev/null | python3 -c '
+import json, re, sys
+try:
+    a = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+v = [x for x in a if re.match(r"(?i)moi(?![a-zà-ÿ])", x["Name"]) and
+     re.search(r"(?i)\.(mp4|mov|m4v|mkv|webm|avi|mts|3gp)$", x["Name"])]
+v.sort(key=lambda x: x.get("ModTime", ""), reverse=True)
+print(v[0]["Path"] if v else "")')"
+  [ -n "$F" ] || return 1
+  echo "$REM:$JD/$F"
+}
+
 SOURCE="$(printf '%s' "${SOURCE:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+if [ "$ACTION" = "detect" ]; then
+  detect_joints || exit 1
+  exit 0
+fi
+if [ "$ACTION" = "resolve" ] && [ -z "$SOURCE" ] && [ -z "${RELEASE_TAG:-}" ]; then
+  if AUTO="$(detect_joints)"; then
+    SOURCE="$AUTO"
+    echo "::notice title=Vidéo trouvée toute seule::$AUTO (ta vidéo « moi… » la plus récente du dossier Drive montage-joints)"
+  fi
+fi
 if [ "$ACTION" = "resolve" ]; then
   if [[ "$SOURCE" =~ ^https?:// ]]; then
     MODE=url; download_url "$SOURCE"

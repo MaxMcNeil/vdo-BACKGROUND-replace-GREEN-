@@ -50,6 +50,12 @@ on:
         type: choice
         default: auto
         options: [auto, horizontal, vertical]
+      chaine_recherche:
+        description: "🔗 Chaîne — recherche d'articles / vidéos / presse par le Montage : légère (économe, 1 clé Gemini suffit) ou non (seulement tes fichiers de montage-joints)"
+        required: false
+        type: choice
+        default: légère
+        options: [légère, non]
 
 jobs:
   assemble:
@@ -204,6 +210,7 @@ jobs:
           CHAINE_VOIX_STUDIO: ${{ github.event.inputs.chaine_voix_studio }}
           CHAINE_SHORTS_SOUS_TITRES: ${{ github.event.inputs.chaine_shorts_sous_titres }}
           CHAINE_FORMAT: ${{ github.event.inputs.chaine_format }}
+          CHAINE_RECHERCHE: ${{ github.event.inputs.chaine_recherche }}
           CHAINE_GH_TOKEN: ${{ steps.chaine_tok.outputs.token || secrets.CHAINE_TOKEN }}
           CHAINE_ID: ${{ needs.assemble.outputs.chaine_id }}
           CHAINE_VIDEO_ID: ${{ needs.assemble.outputs.video_id }}

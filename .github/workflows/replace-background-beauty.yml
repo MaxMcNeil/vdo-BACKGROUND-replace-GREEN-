@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       source:
-        description: "Vidéo : lien Google Drive / Dropbox / lien direct (https://...), ou chemin rclone (ex: gdrive:videos/ma_video.mp4). Vide = Release ci-dessous"
+        description: "Vidéo : lien Google Drive / Dropbox / lien direct (https://...), ou chemin rclone (ex: gdrive:videos/ma_video.mp4). VIDE = trouvée toute seule (ta vidéo « moi… » la plus récente de montage-joints, sinon la Release)"
         required: false
         default: ''
       release_tag:
@@ -97,6 +97,12 @@ on:
         type: choice
         default: auto
         options: [auto, horizontal, vertical]
+      chaine_recherche:
+        description: "🔗 Chaîne — recherche d'articles / vidéos / presse par le Montage : légère (économe, 1 clé Gemini suffit) ou non (seulement tes fichiers de montage-joints)"
+        required: false
+        type: choice
+        default: légère
+        options: [légère, non]
 
 jobs:
   prepare:
@@ -140,6 +146,7 @@ jobs:
           CHAINE_VOIX_STUDIO: ${{ github.event.inputs.chaine_voix_studio }}
           CHAINE_SHORTS_SOUS_TITRES: ${{ github.event.inputs.chaine_shorts_sous_titres }}
           CHAINE_FORMAT: ${{ github.event.inputs.chaine_format }}
+          CHAINE_RECHERCHE: ${{ github.event.inputs.chaine_recherche }}
           PREVIEW: ${{ github.event.inputs.preview_seconds }}
           RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
           CHAINE_JETON_CONFIGURE: ${{ (vars.CHAINE_APP_ID != '' && secrets.CHAINE_APP_KEY != '') || secrets.CHAINE_TOKEN != '' }}
@@ -493,6 +500,7 @@ jobs:
           CHAINE_VOIX_STUDIO: ${{ github.event.inputs.chaine_voix_studio }}
           CHAINE_SHORTS_SOUS_TITRES: ${{ github.event.inputs.chaine_shorts_sous_titres }}
           CHAINE_FORMAT: ${{ github.event.inputs.chaine_format }}
+          CHAINE_RECHERCHE: ${{ github.event.inputs.chaine_recherche }}
           CHAINE_GH_TOKEN: ${{ steps.chaine_tok.outputs.token || secrets.CHAINE_TOKEN }}
           CHAINE_ID: ${{ needs.assemble.outputs.chaine_id }}
           CHAINE_VIDEO_ID: ${{ needs.assemble.outputs.video_id }}

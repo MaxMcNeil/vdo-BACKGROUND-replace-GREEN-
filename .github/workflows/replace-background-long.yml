@@ -15,7 +15,7 @@ on:
         required: false
         default: ''
       source:
-        description: 'Vidéo source sur ton stockage rclone (ex: gdrive:videos/long.mp4). Si vide : on utilise la Release ci-dessous'
+        description: 'Vidéo source sur ton stockage rclone (ex: gdrive:videos/long.mp4). VIDE = trouvée toute seule (ta vidéo « moi… » de montage-joints, sinon la Release)'
         required: false
         default: ''
       release_tag:
@@ -80,6 +80,12 @@ on:
         type: choice
         default: auto
         options: [auto, horizontal, vertical]
+      chaine_recherche:
+        description: "🔗 Chaîne — recherche d'articles / vidéos / presse par le Montage : légère (économe, 1 clé Gemini suffit) ou non (seulement tes fichiers de montage-joints)"
+        required: false
+        type: choice
+        default: légère
+        options: [légère, non]
 
 jobs:
   prepare:
@@ -128,6 +134,7 @@ jobs:
           CHAINE_VOIX_STUDIO: ${{ github.event.inputs.chaine_voix_studio }}
           CHAINE_SHORTS_SOUS_TITRES: ${{ github.event.inputs.chaine_shorts_sous_titres }}
           CHAINE_FORMAT: ${{ github.event.inputs.chaine_format }}
+          CHAINE_RECHERCHE: ${{ github.event.inputs.chaine_recherche }}
           RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
           CHAINE_JETON_CONFIGURE: ${{ (vars.CHAINE_APP_ID != '' && secrets.CHAINE_APP_KEY != '') || secrets.CHAINE_TOKEN != '' }}
         run: bash scripts/chaine.sh verifier
@@ -140,6 +147,10 @@ jobs:
           VIDEO_ASSET: ${{ github.event.inputs.video_asset }}
         run: |
           mkdir -p input
+          if [ -z "$SOURCE" ] && [ -z "$RELEASE_TAG" ]; then   # rien de renseigné : ta vidéo « moi… » de montage-joints
+            SOURCE="$(bash scripts/get_source.sh detect 2>/dev/null || true)"
+            [ -n "$SOURCE" ] && echo "::notice title=Vidéo trouvée toute seule::$SOURCE"
+          fi
           if [ -n "$SOURCE" ]; then
             case "$SOURCE" in *:*) ;; *) echo "::error::'source' doit avoir la forme remote:chemin/fichier.mp4 (ex: gdrive:videos/long.mp4)"; exit 1;; esac
             # remote:dossier/fichier.mp4 -> DIR=remote:dossier, FILE=fichier.mp4 ; remote:fichier.mp4 -> DIR=remote:, FILE=fichier.mp4
@@ -384,6 +395,10 @@ jobs:
           VIDEO_ASSET: ${{ github.event.inputs.video_asset }}
         run: |
           mkdir -p input
+          if [ -z "$SOURCE" ] && [ -z "$RELEASE_TAG" ]; then   # rien de renseigné : ta vidéo « moi… » de montage-joints
+            SOURCE="$(bash scripts/get_source.sh detect 2>/dev/null || true)"
+            [ -n "$SOURCE" ] && echo "::notice title=Vidéo trouvée toute seule::$SOURCE"
+          fi
           if [ -n "$SOURCE" ]; then
             case "$SOURCE" in *:*) ;; *) echo "::error::'source' doit avoir la forme remote:chemin/fichier.mp4 (ex: gdrive:videos/long.mp4)"; exit 1;; esac
             # remote:dossier/fichier.mp4 -> DIR=remote:dossier, FILE=fichier.mp4 ; remote:fichier.mp4 -> DIR=remote:, FILE=fichier.mp4
@@ -764,6 +779,7 @@ jobs:
           CHAINE_VOIX_STUDIO: ${{ github.event.inputs.chaine_voix_studio }}
           CHAINE_SHORTS_SOUS_TITRES: ${{ github.event.inputs.chaine_shorts_sous_titres }}
           CHAINE_FORMAT: ${{ github.event.inputs.chaine_format }}
+          CHAINE_RECHERCHE: ${{ github.event.inputs.chaine_recherche }}
           CHAINE_GH_TOKEN: ${{ steps.chaine_tok.outputs.token || secrets.CHAINE_TOKEN }}
           CHAINE_ID: ${{ needs.assemble.outputs.chaine_id }}
           CHAINE_VIDEO_ID: ${{ needs.assemble.outputs.video_id }}

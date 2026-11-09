@@ -23,6 +23,8 @@ JOINTS="${CHAINE_JOINTS:-montage-joints}"
 FINDER=non   # 🔒 recherche automatique désactivée : tu fournis toi-même articles, vidéos, photos (montage-joints)
 VOIX="$(printf '%s' "${CHAINE_VOIX_STUDIO:-non}" | tr 'A-Z' 'a-z')"
 SHORTS_ST="$(printf '%s' "${CHAINE_SHORTS_SOUS_TITRES:-oui}" | tr 'A-Z' 'a-z')"; [ "$SHORTS_ST" = non ] || SHORTS_ST=oui
+FORMAT="$(printf '%s' "${CHAINE_FORMAT:-auto}" | tr 'A-Z' 'a-z')"   # format de la vidéo MONTÉE (auto / horizontal / vertical)
+case "$FORMAT" in horizontal|vertical) ;; *) FORMAT=auto;; esac
 case "$VOIX" in oui|yes|true|1) VOIX=oui;; *) VOIX=non;; esac   # tout autre valeur = non (défaut sûr)
 SUM="${GITHUB_STEP_SUMMARY:-/dev/stdout}"
 err() { echo "::error title=Chaîne::$*"; { echo "### ❌ Chaîne arrêtée"; echo "$*"; } >> "$SUM"; exit 1; }
@@ -135,13 +137,13 @@ lancer() {
   [ -n "${CHAINE_ID:-}" ] && [ -n "${CHAINE_VIDEO_ID:-}" ] || err "bon de livraison incomplet (identifiant de chaîne ou de vidéo manquant)"
   [ -n "${CHAINE_GH_TOKEN:-}" ] || err "Jeton de chaîne indisponible (GitHub App : variable CHAINE_APP_ID + secret CHAINE_APP_KEY, ou secret CHAINE_TOKEN). Le fond vert est publié ; corrige puis « Re-run failed jobs » (seul ce lancement est refait)."
   local ORIGINE="https://github.com/${GITHUB_REPOSITORY:-?}/actions/runs/${GITHUB_RUN_ID:-0}" OK=0 i
-  python3 - "$CHAINE_ID" "$CHAINE_VIDEO_ID" "${CHAINE_VIDEO_NOM:-video.mp4}" "$FINDER" "$JOINTS" "$ORIGINE" "$VOIX" "$SHORTS_ST" > bon-montage.json <<'PY'
+  python3 - "$CHAINE_ID" "$CHAINE_VIDEO_ID" "${CHAINE_VIDEO_NOM:-video.mp4}" "$FINDER" "$JOINTS" "$ORIGINE" "$VOIX" "$SHORTS_ST" "$FORMAT" > bon-montage.json <<'PY'
 import json, sys
-i, fid, nom, finder, joints, origine, voix, shorts_st = sys.argv[1:9]
+i, fid, nom, finder, joints, origine, voix, shorts_st, fmt = sys.argv[1:10]
 print(json.dumps({"event_type": "chaine-montage", "client_payload": {
     "v": 1, "chaine_id": i, "video_id": fid, "video_nom": nom, "finder": finder,
     "joints": joints, "origine": origine, "voix_studio": voix, "shorts_sous_titres": shorts_st,
-    "fond_dir": "chaine/" + i}}, ensure_ascii=False))
+    "fond_dir": "chaine/" + i, "format_sortie": fmt}}, ensure_ascii=False))
 PY
   cat bon-montage.json
   for i in 1 2 3 4 5; do
@@ -151,6 +153,7 @@ PY
   [ "$OK" = 1 ] || err "Montage LV final n'a pas pu être lancé : $(tail -2 dispatch.err | tr '\n' ' '). L'app « chaine-maxmcneil » a-t-elle « Contents : Read and write » et est-elle installée sur Montage-LV-final ? Corrige puis « Re-run failed jobs »."
   { echo "### 🔗 Chaîne lancée — \`$CHAINE_ID\`"
     echo "- Vidéo transmise (privée, Google Drive) : \`${CHAINE_VIDEO_NOM:-?}\`"
+    echo "- Format de la vidéo montée : **$FORMAT**"
     echo "- 🔒 Recherche automatique désactivée : seuls TES fichiers du dossier Drive « $JOINTS » (photos, vidéos, captures d'articles) sont montés"
     echo "- Suite : [Montage LV final → Actions](https://github.com/$CIBLE_REPO/actions) puis Shorts dans Push-overlay"
     echo "- Résultats finaux : releases \`out-chaine-$CHAINE_ID\` (gardées 2 jours)"; } >> "$SUM"

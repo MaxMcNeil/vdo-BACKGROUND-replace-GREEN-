@@ -70,6 +70,12 @@ on:
         type: choice
         default: oui
         options: [oui, non]
+      chaine_format:
+        description: "🔗 Chaîne — format de la vidéo MONTÉE : auto = comme ta vidéo · horizontal ou vertical = forcé (le fond vert, lui, ne change pas)"
+        required: false
+        type: choice
+        default: auto
+        options: [auto, horizontal, vertical]
 
 jobs:
   prepare:
@@ -112,6 +118,7 @@ jobs:
         env:
           CHAINE_VOIX_STUDIO: ${{ github.event.inputs.chaine_voix_studio }}
           CHAINE_SHORTS_SOUS_TITRES: ${{ github.event.inputs.chaine_shorts_sous_titres }}
+          CHAINE_FORMAT: ${{ github.event.inputs.chaine_format }}
           PREVIEW: ${{ github.event.inputs.preview_seconds }}
           RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
           CHAINE_JETON_CONFIGURE: ${{ (vars.CHAINE_APP_ID != '' && secrets.CHAINE_APP_KEY != '') || secrets.CHAINE_TOKEN != '' }}
@@ -467,6 +474,7 @@ jobs:
         env:
           CHAINE_VOIX_STUDIO: ${{ github.event.inputs.chaine_voix_studio }}
           CHAINE_SHORTS_SOUS_TITRES: ${{ github.event.inputs.chaine_shorts_sous_titres }}
+          CHAINE_FORMAT: ${{ github.event.inputs.chaine_format }}
           CHAINE_GH_TOKEN: ${{ steps.chaine_tok.outputs.token || secrets.CHAINE_TOKEN }}
           CHAINE_ID: ${{ needs.assemble.outputs.chaine_id }}
           CHAINE_VIDEO_ID: ${{ needs.assemble.outputs.video_id }}

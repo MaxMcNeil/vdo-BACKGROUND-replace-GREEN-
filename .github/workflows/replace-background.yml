@@ -62,6 +62,12 @@ on:
         type: choice
         default: oui
         options: [oui, non]
+      chaine_format:
+        description: "🔗 Chaîne — format de la vidéo MONTÉE : auto = comme ta vidéo · horizontal ou vertical = forcé (le fond vert, lui, ne change pas)"
+        required: false
+        type: choice
+        default: auto
+        options: [auto, horizontal, vertical]
 
 jobs:
   replace-background:
@@ -103,6 +109,7 @@ jobs:
         env:
           CHAINE_VOIX_STUDIO: ${{ github.event.inputs.chaine_voix_studio }}
           CHAINE_SHORTS_SOUS_TITRES: ${{ github.event.inputs.chaine_shorts_sous_titres }}
+          CHAINE_FORMAT: ${{ github.event.inputs.chaine_format }}
           RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
           CHAINE_JETON_CONFIGURE: ${{ (vars.CHAINE_APP_ID != '' && secrets.CHAINE_APP_KEY != '') || secrets.CHAINE_TOKEN != '' }}
         run: bash scripts/chaine.sh verifier
@@ -126,6 +133,7 @@ jobs:
           ENCHAINER: ${{ github.event.inputs.enchainer }}
           CHAINE_VOIX_STUDIO: ${{ github.event.inputs.chaine_voix_studio }}
           CHAINE_SHORTS_SOUS_TITRES: ${{ github.event.inputs.chaine_shorts_sous_titres }}
+          CHAINE_FORMAT: ${{ github.event.inputs.chaine_format }}
           VERT_INT: ${{ github.event.inputs.vert_interieur }}
           VITESSE: ${{ github.event.inputs.vitesse }}
         run: |
@@ -141,7 +149,7 @@ jobs:
             [ -n "$KEY_COLOR" ] && ARGS+=(-f "key_color=$KEY_COLOR")
             ARGS+=(-f "clean_edges=${CLEAN_EDGES:-true}")
             ARGS+=(-f "enchainer=${ENCHAINER:-false}")
-            ARGS+=(-f "chaine_voix_studio=${CHAINE_VOIX_STUDIO:-non}" -f "chaine_shorts_sous_titres=${CHAINE_SHORTS_SOUS_TITRES:-oui}" -f "vert_interieur=${VERT_INT:-doux}" -f "vitesse=${VITESSE:-1}")
+            ARGS+=(-f "chaine_voix_studio=${CHAINE_VOIX_STUDIO:-non}" -f "chaine_shorts_sous_titres=${CHAINE_SHORTS_SOUS_TITRES:-oui}" -f "chaine_format=${CHAINE_FORMAT:-auto}" -f "vert_interieur=${VERT_INT:-doux}" -f "vitesse=${VITESSE:-1}")
             if gh workflow run replace-background-long.yml --repo "${{ github.repository }}" "${ARGS[@]}"; then
               echo "long=true" >> "$GITHUB_OUTPUT"
               echo "::notice::Vidéo longue : traitement lancé dans le workflow 'vidéos longues' (onglet Actions). Le résultat sera envoyé sur ton stockage externe."
@@ -449,6 +457,7 @@ jobs:
         env:
           CHAINE_VOIX_STUDIO: ${{ github.event.inputs.chaine_voix_studio }}
           CHAINE_SHORTS_SOUS_TITRES: ${{ github.event.inputs.chaine_shorts_sous_titres }}
+          CHAINE_FORMAT: ${{ github.event.inputs.chaine_format }}
           CHAINE_GH_TOKEN: ${{ steps.chaine_tok.outputs.token || secrets.CHAINE_TOKEN }}
           RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
           CHAINE_FOND: ${{ github.event.inputs.fond || 'day' }}

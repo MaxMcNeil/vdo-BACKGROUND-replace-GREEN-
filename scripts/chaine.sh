@@ -108,8 +108,27 @@ deposer() {
   fi
   [ -n "$FID" ] || err "identifiant Google Drive introuvable pour la vidéo"
   CHAINE_VIDEO_ID="$FID"
+  envoyer_fond
   out chaine_id "$CHAINE_ID"; out video_id "$CHAINE_VIDEO_ID"; out video_nom "$CHAINE_VIDEO_NOM"
   echo "Vidéo prête pour le montage : $CHAINE_VIDEO_NOM (Drive $CHAINE_VIDEO_ID)"
+}
+
+# Décor du montage : l'image de fond utilisée (day / night, horizontale + verticale) part avec la vidéo dans
+# chaine/<id>/fond-h.jpg et fond-v.jpg. Le Montage la compare à ta vidéo pour savoir où tu es (ta silhouette) et fait
+# tourner lentement le logo de la chaîne DERRIÈRE toi. Facultatif : en cas d'échec, montage normal (rien ne s'arrête).
+envoyer_fond() {
+  local F="${CHAINE_FOND:-}" D SFX o f
+  [ -n "$F" ] || return 0
+  D="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/input"
+  SFX=""; [ "$F" = night ] && SFX="-night"
+  for o in h v; do
+    if [ "$o" = v ]; then f="$D/background$SFX-vertical.jpg"; else f="$D/background$SFX.jpg"; fi
+    [ -s "$f" ] || continue
+    rclone copyto "$f" "$REMOTE:chaine/$CHAINE_ID/fond-$o.jpg" -q 2>/dev/null \
+      && echo "Décor du montage : fond $F ($o) transmis" \
+      || echo "::notice::fond ($o) non transmis : montage sans logo derrière toi"
+  done
+  return 0
 }
 
 lancer() {
@@ -121,7 +140,8 @@ import json, sys
 i, fid, nom, finder, joints, origine, voix, shorts_st = sys.argv[1:9]
 print(json.dumps({"event_type": "chaine-montage", "client_payload": {
     "v": 1, "chaine_id": i, "video_id": fid, "video_nom": nom, "finder": finder,
-    "joints": joints, "origine": origine, "voix_studio": voix, "shorts_sous_titres": shorts_st}}, ensure_ascii=False))
+    "joints": joints, "origine": origine, "voix_studio": voix, "shorts_sous_titres": shorts_st,
+    "fond_dir": "chaine/" + i}}, ensure_ascii=False))
 PY
   cat bon-montage.json
   for i in 1 2 3 4 5; do

@@ -451,4 +451,5 @@ jobs:
           CHAINE_SHORTS_SOUS_TITRES: ${{ github.event.inputs.chaine_shorts_sous_titres }}
           CHAINE_GH_TOKEN: ${{ steps.chaine_tok.outputs.token || secrets.CHAINE_TOKEN }}
           RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
+          CHAINE_FOND: ${{ github.event.inputs.fond || 'day' }}
         run: bash scripts/chaine.sh envoyer output/result.mp4

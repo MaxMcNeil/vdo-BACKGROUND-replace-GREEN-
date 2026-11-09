@@ -428,13 +428,16 @@ jobs:
         if: github.event.inputs.enchainer == 'true'
         uses: actions/checkout@v5
         with:
-          sparse-checkout: scripts
+          sparse-checkout: |
+            scripts
+            input
           path: repo
 
       - name: Chaîne — déposer la vidéo pour le montage (Google Drive, privé)
         id: dep
         if: github.event.inputs.enchainer == 'true'
         env:
+          CHAINE_FOND: ${{ github.event.inputs.fond || 'day' }}
           RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
           OUT_NAME: ${{ needs.prepare.outputs.out_name }}
           DEST: ${{ github.event.inputs.dest || vars.RCLONE_DEST }}

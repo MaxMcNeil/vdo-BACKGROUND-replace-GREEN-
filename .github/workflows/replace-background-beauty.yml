@@ -54,14 +54,14 @@ on:
         description: "Test rapide : ne traiter que les N premières secondes (ex: 15). Vide = vidéo entière"
         required: false
         default: ''
-      background_file:
-        description: 'Image de fond pour les vidéos horizontales, dans input/ (ex: background.jpg)'
+      fond:
+        description: 'Fond : day (bibliothèque d origine) ou night (salon chaleureux, lampe allumée)'
         required: false
-        default: 'background.jpg'
-      background_file_vertical:
-        description: 'Image de fond pour les vidéos VERTICALES, dans input/ (ex: background-vertical.jpg)'
-        required: false
-        default: 'background-vertical.jpg'
+        type: choice
+        options:
+          - day
+          - night
+        default: 'day'
       key_color:
         description: 'Couleur du fond vert en hex (ex: 139D74). Vide = mesure automatique'
         required: false
@@ -168,8 +168,8 @@ jobs:
           KEY_OVERRIDE: ${{ github.event.inputs.key_color }}
           PREVIEW: ${{ github.event.inputs.preview_seconds }}
           CHUNK_MINUTES: ${{ github.event.inputs.chunk_minutes }}
-          BGH: ${{ github.event.inputs.background_file }}
-          BGV: ${{ github.event.inputs.background_file_vertical }}
+          BGH: ${{ github.event.inputs.fond == 'night' && 'background-night.jpg' || 'background.jpg' }}
+          BGV: ${{ github.event.inputs.fond == 'night' && 'background-night-vertical.jpg' || 'background-vertical.jpg' }}
         run: |
           python3 scripts/beauty_plan.py
           if [ "$(grep '^vertical=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2)" = "true" ]; then

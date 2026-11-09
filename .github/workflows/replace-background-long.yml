@@ -26,14 +26,14 @@ on:
         description: 'Nom du fichier vidéo dans cette Release (si source vide)'
         required: false
         default: ''
-      background_file:
-        description: 'Nom du fichier image de fond dans input/ (ex: background.jpg)'
+      fond:
+        description: 'Fond : day (bibliothèque d origine) ou night (salon chaleureux, lampe allumée)'
         required: false
-        default: 'background.jpg'
-      background_file_vertical:
-        description: 'Image de fond pour les vidéos VERTICALES, dans input/ (ex: background-vertical.jpg)'
-        required: false
-        default: 'background-vertical.jpg'
+        type: choice
+        options:
+          - day
+          - night
+        default: 'day'
       key_color:
         description: 'Couleur du fond vert en hex (ex: 139D74). Laisser vide = mesure automatique'
         required: false
@@ -171,8 +171,8 @@ jobs:
         id: orient
         env:
           VIDEO_PATH: ${{ env.SRC }}
-          BGH: ${{ github.event.inputs.background_file }}
-          BGV: ${{ github.event.inputs.background_file_vertical }}
+          BGH: ${{ github.event.inputs.fond == 'night' && 'background-night.jpg' || 'background.jpg' }}
+          BGV: ${{ github.event.inputs.fond == 'night' && 'background-night-vertical.jpg' || 'background-vertical.jpg' }}
         run: |
           python3 - <<'PY'
           import json, os, subprocess
@@ -467,7 +467,7 @@ jobs:
           LEN: ${{ matrix.len }}
           FPS: ${{ needs.prepare.outputs.fps }}
           HAS_AUDIO: ${{ needs.prepare.outputs.has_audio }}
-          BGH: ${{ github.event.inputs.background_file }}
+          BGH: ${{ github.event.inputs.fond == 'night' && 'background-night.jpg' || 'background.jpg' }}
           OWV: ${{ needs.prepare.outputs.out_w }}
           OHV: ${{ needs.prepare.outputs.out_h }}
           VERT_INT: ${{ github.event.inputs.vert_interieur }}
@@ -528,7 +528,7 @@ jobs:
           LEN: ${{ matrix.len }}
           FPS: ${{ needs.prepare.outputs.fps }}
           HAS_AUDIO: ${{ needs.prepare.outputs.has_audio }}
-          BGV: ${{ github.event.inputs.background_file_vertical }}
+          BGV: ${{ github.event.inputs.fond == 'night' && 'background-night-vertical.jpg' || 'background-vertical.jpg' }}
           OWV: ${{ needs.prepare.outputs.out_w }}
           OHV: ${{ needs.prepare.outputs.out_h }}
           VERT_INT: ${{ github.event.inputs.vert_interieur }}

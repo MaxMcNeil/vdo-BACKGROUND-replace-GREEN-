@@ -20,8 +20,8 @@ Les vidéos (volumineuses) passent par les **Releases GitHub** (jusqu'à environ
 | `.github/workflows/yeux-sans-fond-vert.yml` | **Vidéo SANS fond vert** : seulement les yeux (même retouche que Beauté), reste de l'image d'origine ; vitesse et chaîne comme les autres |
 | `scripts/` | Programmes du workflow Beauté (accès à la vidéo, mesure, retouche image par image) |
 | `models/` | Modèles MediaPipe de détection du visage et de la silhouette (licence Apache 2.0) |
-| `input/background.jpg` | Image de fond pour les vidéos **horizontales** |
-| `input/background-vertical.jpg` | Image de fond pour les vidéos **verticales** |
+| `input/background.jpg` / `input/background-vertical.jpg` | Fond **day** (bibliothèque d'origine), horizontal / vertical |
+| `input/background-night.jpg` / `input/background-night-vertical.jpg` | Fond **night** (salon chaleureux, lampe allumée), horizontal / vertical |
 
 Garde **les deux images** dans `input/`, même si tu ne filmes qu'en horizontal : le workflow principal vérifie la présence du fond horizontal au démarrage.
 
@@ -42,8 +42,7 @@ Onglet **Actions** → **Replace Green Screen Background** → **Run workflow**,
 |---|---|
 | `release_tag` | Tag de la release qui contient la vidéo (ex: `v1`) |
 | `video_asset` | Nom exact du fichier attaché à cette release (ex: `video.mp4`) |
-| `background_file` | Fond horizontal dans `input/` (défaut : `background.jpg`) |
-| `background_file_vertical` | Fond vertical dans `input/` (défaut : `background-vertical.jpg`) |
+| `fond` | Menu **day** / **night** (défaut : day). Le bon fichier horizontal ou vertical est choisi automatiquement |
 | `key_color` | Optionnel : couleur du fond vert en hex (ex: `139D74`). Vide = mesure automatique |
 | `force_single` | Optionnel : `true` pour forcer le traitement normal même si la vidéo est longue |
 
@@ -54,9 +53,9 @@ Le workflow publie une **nouvelle Release** nommée `result-<numéro de run>` co
 ## Horizontal ou vertical
 
 Le workflow lit les dimensions de la vidéo (rotation des téléphones comprise) :
-- **Horizontale 16:9** : sortie 1920×1080 avec `background.jpg`
-- **Autre format horizontal ou carré** (4:3, 1:1, etc.) : la sortie garde les proportions de la vidéo (ex: 1440×1080), avec `background.jpg`. Plus d'étirement.
-- **Verticale** : sortie à la taille de la vidéo (ex: 1080×1920) avec `background-vertical.jpg`.
+- **Horizontale 16:9** : sortie 1920×1080 avec le fond horizontal choisi
+- **Autre format horizontal ou carré** (4:3, 1:1, etc.) : la sortie garde les proportions de la vidéo (ex: 1440×1080), avec le fond horizontal choisi. Plus d'étirement.
+- **Verticale** : sortie à la taille de la vidéo (ex: 1080×1920) avec le fond vertical choisi.
 
 Dans tous les cas, l'image de fond est **recadrée au centre** pour remplir l'écran, sans jamais l'étirer : pour la verticale, utilise une image de fond **au format portrait**.
 
@@ -130,7 +129,7 @@ Une vidéo de plus de 2 Go ne peut pas passer par une Release. Dépose-la sur to
 |---|---|
 | `source` | Chemin rclone de la vidéo, de la forme `nom_du_stockage:dossier/fichier.mp4` (ex: `gdrive:videos/long.mp4`, ou `gdrive:long.mp4` si le fichier est à la racine du Drive) |
 | `dest` | Dossier de destination (vide = variable `RCLONE_DEST`) |
-| `background_file` / `background_file_vertical` | Fonds, comme ci-dessus |
+| `fond` | day / night, comme ci-dessus |
 | `key_color` | Optionnel, comme ci-dessus |
 | `chunk_minutes` | Durée de chaque morceau en minutes. Vide = automatique (défaut) |
 
@@ -163,7 +162,7 @@ Tout vide : le workflow prend tout seul la dernière vidéo mise en Release.
 | `vert_interieur` | `doux` (défaut) : retrait du vert habituel sur les bords, lissé à l’intérieur (veste / chemise / barbe : même couleur, sans grain amplifié) ; `plein` : ancien réglage partout |
 | `clean_edges` | Remplace aussi le mur / plafond visibles autour du tissu vert (défaut : oui) |
 | `preview_seconds` | Test rapide : seulement les N premières secondes (ex: `15`) |
-| `background_file`, `background_file_vertical`, `key_color` | Comme le workflow principal |
+| `fond`, `key_color` | Comme le workflow principal |
 | `dest` | Dossier rclone où envoyer aussi le résultat (ex: `gdrive:resultats`) |
 | `chunk_minutes` | Durée des morceaux traités en parallèle. Vide = automatique |
 
@@ -236,7 +235,7 @@ dans **Video to Shorts** (Push-overlay). Sans la case cochée, **rien ne change*
 | Message | Que faire |
 |---|---|
 | `Mesure du fond vert peu fiable` | Relance avec `key_color` (ex: `139D74`), couleur mesurée sur une image de ta vidéo |
-| `Image de fond verticale introuvable` | Vérifie `input/background-vertical.jpg` (ou le nom donné dans `background_file_vertical`) |
+| `Image de fond verticale introuvable` | Vérifie `input/background-vertical.jpg` (day) ou `input/background-night-vertical.jpg` (night) |
 | `Secret RCLONE_CONFIG manquant` | Configure le stockage externe (voir plus haut) |
 | Vidéo longue traitée normalement avec un avertissement | Le stockage externe n'est pas configuré : voir plus haut |
 | `Fichier introuvable via rclone` | Le log liste ce que rclone voit dans le dossier : corrige le chemin (dossiers, majuscules, extension). Un fichier « Partagé avec moi » n'est pas visible |

@@ -14,18 +14,18 @@ on:
       video_asset:
         description: "Nom du fichier vidéo attaché à cette Release (ex: video.mp4)"
         required: true
-      background_file:
-        description: 'Nom du fichier image de fond dans input/ (ex: background.jpg)'
+      fond:
+        description: 'Fond : day (bibliothèque d origine) ou night (salon chaleureux, lampe allumée)'
         required: false
-        default: 'background.jpg'
+        type: choice
+        options:
+          - day
+          - night
+        default: 'day'
       key_color:
         description: 'Couleur du fond vert en hex (ex: 139D74). Laisser vide = mesure automatique'
         required: false
         default: ''
-      background_file_vertical:
-        description: 'Image de fond pour les vidéos VERTICALES, dans input/ (ex: background-vertical.jpg)'
-        required: false
-        default: 'background-vertical.jpg'
       clean_edges:
         description: 'Remplacer aussi le mur / plafond visibles autour du tissu vert (le traitement sur le tissu reste identique)'
         required: false
@@ -76,7 +76,7 @@ jobs:
       - name: Préparer les noms de fichiers
         id: files
         env:
-          BGFILE: ${{ github.event.inputs.background_file }}
+          BGFILE: ${{ github.event.inputs.fond == 'night' && 'background-night.jpg' || 'background.jpg' }}
         run: |
           BG="${BGFILE:-background.jpg}"
           echo "bg=$BG" >> "$GITHUB_OUTPUT"
@@ -120,7 +120,8 @@ jobs:
           RTAG: ${{ github.event.inputs.release_tag }}
           RASSET: ${{ github.event.inputs.video_asset }}
           BGH: ${{ steps.files.outputs.bg }}
-          BGV: ${{ github.event.inputs.background_file_vertical }}
+          BGV: ${{ github.event.inputs.fond == 'night' && 'background-night-vertical.jpg' || 'background-vertical.jpg' }}
+          FOND: ${{ github.event.inputs.fond }}
           CLEAN_EDGES: ${{ github.event.inputs.clean_edges }}
           ENCHAINER: ${{ github.event.inputs.enchainer }}
           CHAINE_VOIX_STUDIO: ${{ github.event.inputs.chaine_voix_studio }}
@@ -136,7 +137,7 @@ jobs:
             if [ -z "$RCLONE_DEST" ] || [ "$HAS_RCLONE" != "true" ]; then
               echo "::warning::Vidéo longue détectée, mais le stockage externe n'est pas configuré (secret RCLONE_CONFIG + variable RCLONE_DEST) : traitement normal, avec risque de dépasser les limites de GitHub."
             else
-            ARGS=(-f "release_tag=$RTAG" -f "video_asset=$RASSET" -f "background_file=$BGH" -f "background_file_vertical=${BGV:-background-vertical.jpg}" -f "dest=$RCLONE_DEST")
+            ARGS=(-f "release_tag=$RTAG" -f "video_asset=$RASSET" -f "fond=${FOND:-day}" -f "dest=$RCLONE_DEST")
             [ -n "$KEY_COLOR" ] && ARGS+=(-f "key_color=$KEY_COLOR")
             ARGS+=(-f "clean_edges=${CLEAN_EDGES:-true}")
             ARGS+=(-f "enchainer=${ENCHAINER:-false}")
@@ -357,7 +358,7 @@ jobs:
       - name: Composer la vidéo VERTICALE (même traitement, format portrait)
         if: steps.route.outputs.long != 'true' && steps.orient.outputs.vertical == 'true'
         env:
-          BGV: ${{ github.event.inputs.background_file_vertical }}
+          BGV: ${{ github.event.inputs.fond == 'night' && 'background-night-vertical.jpg' || 'background-vertical.jpg' }}
           OWV: ${{ steps.orient.outputs.out_w }}
           OHV: ${{ steps.orient.outputs.out_h }}
           VERT_INT: ${{ github.event.inputs.vert_interieur }}

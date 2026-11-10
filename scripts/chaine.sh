@@ -112,7 +112,6 @@ deposer() {
   fi
   [ -n "$FID" ] || err "identifiant Google Drive introuvable pour la vidéo"
   CHAINE_VIDEO_ID="$FID"
-  envoyer_fond
   out chaine_id "$CHAINE_ID"; out video_id "$CHAINE_VIDEO_ID"; out video_nom "$CHAINE_VIDEO_NOM"
   echo "Vidéo prête pour le montage : $CHAINE_VIDEO_NOM (Drive $CHAINE_VIDEO_ID)"
 }

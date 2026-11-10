@@ -211,8 +211,6 @@ dans **Video to Shorts** (Push-overlay). Sans la case cochée, **rien ne change*
 - Espace Google Drive : un résultat déjà envoyé sur ton Drive (fond vert de plus de 2 Go, ou source rclone) est
   réutilisé tel quel, sans deuxième copie ; un montage de moins de 1,9 Go passe aux Shorts par sa release, sans Drive.
   L'espace libre est vérifié avant chaque envoi (message clair si le Drive est presque plein).
-- 🌀 L'image de fond utilisée (day / night) part avec ta vidéo : le Montage fait tourner lentement le logo de la
-  chaîne DERRIÈRE toi dans les plans pleins (jamais sur toi). Facultatif : en cas de souci, montage normal.
 - Le lancement de l'étape suivante est un petit job séparé (« 🔗 Chaîne — lancer… ») : en cas d'échec,
   « Re-run failed jobs » ne refait que ce lancement, jamais le fond vert ni le montage.
 - Aucun cron : la chaîne ne se déclenche que quand tu lances le fond vert avec la case cochée.

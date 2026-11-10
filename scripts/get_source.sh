@@ -135,7 +135,7 @@ resolve_release() {
   if [ -z "$TAG" ]; then
     # Rien de précisé : dernière Release (hors résultats) qui contient une vidéo
     TAG="$(gh api "repos/$REPO/releases?per_page=50" --jq '.[] | select((.tag_name|startswith("result-")|not) and (.tag_name|startswith("tmp")|not)) | select([.assets[].name | ascii_downcase | test("\\.(mp4|mov|m4v|mkv|webm|avi|mts|3gp)$")] | any) | .tag_name' | head -1)"
-    [ -n "$TAG" ] || { echo "::error::Aucune vidéo trouvée : renseigne 'source' (lien ou rclone) ou 'release_tag'."; exit 1; }
+    [ -n "$TAG" ] || { echo "::error::Aucune vidéo trouvée : dépose ta vidéo dans le dossier Drive montage-joints avec un nom qui commence par « moi » (ex : moi_debat.mp4), ou renseigne 'source' (lien ou gdrive:dossier/fichier.mp4)."; exit 1; }
     echo "::notice::Release utilisée automatiquement : $TAG"
   fi
   if [ -z "$ASSET" ]; then

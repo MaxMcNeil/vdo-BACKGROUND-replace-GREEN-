@@ -513,7 +513,8 @@ class Beauty:
 
 class SteadyPerson:
     """Silhouette STABLE hors du tissu vert (mur, bords de l'image) : jamais de clignotement.
-      - près des bords de l'image (épaule qui sort du cadre puis revient), la détection est moins sûre : seuil abaissé ;
+      - près des bords GAUCHE et DROIT de l'image (épaule qui sort du cadre puis revient), la détection est moins sûre :
+        seuil abaissé (rien ne change en haut, près de ta tête) ;
       - une partie de toi détectée reste gardée et ne s'efface que doucement (~0,4 s) : une image ratée par la détection
         ne fait plus apparaître / disparaître ta chemise d'une image à l'autre."""
     DECAY, HOLD = 0.88, 4    # gardé tel quel 4 images, puis effacé doucement (~0,5 s)
@@ -525,7 +526,8 @@ class SteadyPerson:
         h, w = raw.shape
         if self.band is None or self.band.shape != raw.shape:
             yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
-            d = np.minimum.reduce([xx, w - 1 - xx, yy, h - 1 - yy]) / float(max(w, h))
+            # SEULEMENT les côtés gauche et droit (là où sort ton épaule) ; rien en haut (tête, cheveux) ni en bas
+            d = np.minimum(xx, w - 1 - xx) / float(w)
             self.band = np.clip(1.0 - d / 0.07, 0.0, 1.0).astype(np.float32)   # 1 au bord, 0 à 7 % vers l'intérieur
             self.prev, self.hist = None, []
         p = smoothstep(raw, 0.25, 0.55) * (1.0 - self.band) + smoothstep(raw, 0.12, 0.40) * self.band

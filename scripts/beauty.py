@@ -216,6 +216,7 @@ class Beauty:
                                       # (pas de fondu au début de chaque morceau ni aux raccords)
         self.eye_ref = [None, None]   # luminosité du blanc de l'oeil, lissée
         self.person_hist = []
+        self.steady = SteadyPerson()
         self.cloth = None
         self.smooth_key = None        # (K, EK, THR) du retrait lissé à l'intérieur (None = retrait plein partout, comme avant)
         self.last_conf = None
@@ -453,11 +454,7 @@ class Beauty:
             p = cv2.ximgproc.guidedFilter(guide, p.astype(np.float32), 3, 2e-3)   # contour collé au vrai bord (bras sur le mur)
         except Exception:
             pass
-        p = smoothstep(p, 0.25, 0.55).astype(np.float32)
-        self.person_hist.append(p)
-        if len(self.person_hist) > 2:
-            self.person_hist.pop(0)
-        p = np.maximum.reduce(self.person_hist)
+        p = self.steady(p.astype(np.float32))                          # stable : jamais de clignotement aux bords
         p = cv2.dilate(p, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
         return cv2.GaussianBlur(p, (0, 0), 0.8)
 
@@ -512,6 +509,33 @@ class Beauty:
             keep = np.maximum(self.cloth, np.clip(p, 0, 1))
             out[..., 3] = (out[..., 3].astype(np.float32) * keep + 0.5).astype(np.uint8)
         return out
+
+
+class SteadyPerson:
+    """Silhouette STABLE hors du tissu vert (mur, bords de l'image) : jamais de clignotement.
+      - près des bords de l'image (épaule qui sort du cadre puis revient), la détection est moins sûre : seuil abaissé ;
+      - une partie de toi détectée reste gardée et ne s'efface que doucement (~0,4 s) : une image ratée par la détection
+        ne fait plus apparaître / disparaître ta chemise d'une image à l'autre."""
+    DECAY, HOLD = 0.88, 4    # gardé tel quel 4 images, puis effacé doucement (~0,5 s)
+
+    def __init__(self):
+        self.prev, self.band, self.hist = None, None, []
+
+    def __call__(self, raw):
+        h, w = raw.shape
+        if self.band is None or self.band.shape != raw.shape:
+            yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+            d = np.minimum.reduce([xx, w - 1 - xx, yy, h - 1 - yy]) / float(max(w, h))
+            self.band = np.clip(1.0 - d / 0.07, 0.0, 1.0).astype(np.float32)   # 1 au bord, 0 à 7 % vers l'intérieur
+            self.prev, self.hist = None, []
+        p = smoothstep(raw, 0.25, 0.55) * (1.0 - self.band) + smoothstep(raw, 0.12, 0.40) * self.band
+        p = p.astype(np.float32)
+        self.hist = (self.hist + [p])[-self.HOLD:]
+        p = np.maximum.reduce(self.hist)
+        if self.prev is not None:
+            p = np.maximum(p, self.prev * self.DECAY)
+        self.prev = p
+        return p
 
 
 # ---------------------------------------------------------------- zone du tissu vert (mesurée une fois par vidéo)

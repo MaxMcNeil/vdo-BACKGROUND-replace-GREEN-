@@ -14,7 +14,7 @@ import numpy as np
 import cv2
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from beauty import analyze_cloth, smoothstep, log  # noqa: E402
+from beauty import SteadyPerson, analyze_cloth, smoothstep, log  # noqa: E402
 
 
 
@@ -85,7 +85,8 @@ def main():
     pout = subprocess.Popen(cmd_out, stdin=subprocess.PIPE)
     n_max = int(np.floor(float(a.len) * fps + 0.5)) if a.len else None
     fsz = sw * sh * 3
-    n, last, hist, t0 = 0, None, [], time.time()
+    n, last, t0 = 0, None, time.time()
+    steady = SteadyPerson()
     outside = zone8 < 255
     try:
         while n_max is None or n < n_max:
@@ -103,13 +104,10 @@ def main():
                         p = cv2.ximgproc.guidedFilter(g, p, 3, 2e-3)
                     except Exception:
                         pass
-                    last = smoothstep(p, 0.25, 0.55).astype(np.float32)
+                    last = p.astype(np.float32)
                 except Exception:
                     last = np.ones((sh, sw), np.float32)                # en cas de doute : on garde tout
-            hist.append(last)
-            if len(hist) > 2:
-                hist.pop(0)
-            p = np.maximum.reduce(hist)
+            p = steady(last)                                            # stable : jamais de clignotement aux bords
             p = cv2.dilate(p, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
             p = cv2.GaussianBlur(p, (0, 0), 0.8)
             pf = cv2.resize(p, (W, H), interpolation=cv2.INTER_LINEAR)

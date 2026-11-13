@@ -68,16 +68,25 @@ serve_rclone() {   # $1 = remote:chemin/fichier.ext
     echo "Vérifie : le chemin exact (dossiers compris), les majuscules, l'extension, et que le fichier n'est pas seulement 'Partagé avec moi'."
     exit 1
   fi
-  setsid nohup rclone serve http "$DIR" --addr 127.0.0.1:8081 --read-only > rclone-serve.log 2>&1 &
   ENC="$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1]))' "$FILE")"
   SRC="http://127.0.0.1:8081/$ENC"
   CODE=000
-  for i in $(seq 1 30); do
-    CODE=$(curl -s -o /dev/null -w "%{http_code}" -r 0-0 "$SRC" || true)
-    case "$CODE" in 200|206) break;; esac
-    sleep 1
+  # Google Drive peut répondre lentement (16 morceaux l'interrogent en même temps) : on attend jusqu'à 90 s, puis on
+  # redémarre la lecture et on attend encore 90 s, avant de déclarer l'échec (avant : 30 s, une seule tentative).
+  local ESSAI
+  for ESSAI in 1 2; do
+    setsid nohup rclone serve http "$DIR" --addr 127.0.0.1:8081 --read-only > rclone-serve.log 2>&1 &
+    for i in $(seq 1 90); do
+      CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 -r 0-0 "$SRC" || true)
+      case "$CODE" in 200|206) break 2;; esac
+      pgrep -f "rclone serve http" >/dev/null 2>&1 || break   # le serveur s'est arrêté : inutile d'attendre, on le relance
+      sleep 1
+    done
+    [ "$ESSAI" = 1 ] && echo "::notice::Google Drive lent à répondre (HTTP $CODE) : lecture redémarrée, nouvel essai."
+    pkill -f "rclone serve http" 2>/dev/null || true
+    sleep 3
   done
-  case "$CODE" in 200|206) ;; *) echo "::error::Serveur rclone : réponse HTTP $CODE pour $SRC"; cat rclone-serve.log; exit 1;; esac
+  case "$CODE" in 200|206) ;; *) echo "::error::Serveur rclone : réponse HTTP $CODE pour $SRC (2 essais de 90 s)"; cat rclone-serve.log; exit 1;; esac
   BASENAME="${FILE%.*}"
 }
 

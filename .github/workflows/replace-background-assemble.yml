@@ -56,6 +56,12 @@ on:
         type: choice
         default: légère
         options: [légère, non]
+      chaine_mode:
+        description: "🔗 Chaîne — 🎙 mode du Montage : normal · commentaire d'une vidéo = tu commentes la vidéo déposée dans montage-joints (prompteur lancé avant dans ce mode). Pas de Shorts dans ce mode"
+        required: false
+        type: choice
+        default: normal
+        options: [normal, "commentaire d'une vidéo"]
 
 jobs:
   assemble:
@@ -211,6 +217,7 @@ jobs:
           CHAINE_SHORTS_SOUS_TITRES: ${{ github.event.inputs.chaine_shorts_sous_titres }}
           CHAINE_FORMAT: ${{ github.event.inputs.chaine_format }}
           CHAINE_RECHERCHE: ${{ github.event.inputs.chaine_recherche }}
+          CHAINE_MODE: ${{ github.event.inputs.chaine_mode }}
           CHAINE_GH_TOKEN: ${{ steps.chaine_tok.outputs.token || secrets.CHAINE_TOKEN }}
           CHAINE_ID: ${{ needs.assemble.outputs.chaine_id }}
           CHAINE_VIDEO_ID: ${{ needs.assemble.outputs.video_id }}

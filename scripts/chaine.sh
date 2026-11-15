@@ -27,6 +27,9 @@ FORMAT="$(printf '%s' "${CHAINE_FORMAT:-auto}" | tr 'A-Z' 'a-z')"   # format de 
 case "$FORMAT" in horizontal|vertical) ;; *) FORMAT=auto;; esac
 RECH="$(printf '%s' "${CHAINE_RECHERCHE:-légère}" | tr 'A-Z' 'a-z')"   # recherche presse du Montage : légère / non
 case "$RECH" in non|no|false|0) RECH=non;; *) RECH=legere;; esac
+# 🎙 mode du Montage : normal (défaut) / commentaire d'une vidéo (la vidéo commentée est dans montage-joints)
+MODE_M="$(printf '%s' "${CHAINE_MODE:-normal}" | tr 'A-Z' 'a-z')"
+case "$MODE_M" in comment*) MODE_M=commentaire;; *) MODE_M=normal;; esac
 case "$VOIX" in oui|yes|true|1) VOIX=oui;; *) VOIX=non;; esac   # tout autre valeur = non (défaut sûr)
 SUM="${GITHUB_STEP_SUMMARY:-/dev/stdout}"
 err() { echo "::error title=Chaîne::$*"; { echo "### ❌ Chaîne arrêtée"; echo "$*"; } >> "$SUM"; exit 1; }
@@ -138,13 +141,14 @@ lancer() {
   [ -n "${CHAINE_ID:-}" ] && [ -n "${CHAINE_VIDEO_ID:-}" ] || err "bon de livraison incomplet (identifiant de chaîne ou de vidéo manquant)"
   [ -n "${CHAINE_GH_TOKEN:-}" ] || err "Jeton de chaîne indisponible (GitHub App : variable CHAINE_APP_ID + secret CHAINE_APP_KEY, ou secret CHAINE_TOKEN). Le fond vert est publié ; corrige puis « Re-run failed jobs » (seul ce lancement est refait)."
   local ORIGINE="https://github.com/${GITHUB_REPOSITORY:-?}/actions/runs/${GITHUB_RUN_ID:-0}" OK=0 i
-  python3 - "$CHAINE_ID" "$CHAINE_VIDEO_ID" "${CHAINE_VIDEO_NOM:-video.mp4}" "$FINDER" "$JOINTS" "$ORIGINE" "$VOIX" "$SHORTS_ST" "$FORMAT" "$RECH" > bon-montage.json <<'PY'
+  python3 - "$CHAINE_ID" "$CHAINE_VIDEO_ID" "${CHAINE_VIDEO_NOM:-video.mp4}" "$FINDER" "$JOINTS" "$ORIGINE" "$VOIX" "$SHORTS_ST" "$FORMAT" "$RECH" "$MODE_M" > bon-montage.json <<'PY'
 import json, sys
-i, fid, nom, finder, joints, origine, voix, shorts_st, fmt, rech = sys.argv[1:11]
+i, fid, nom, finder, joints, origine, voix, shorts_st, fmt, rech, mode = sys.argv[1:12]
 # GitHub n'accepte que 10 réglages au premier niveau : les réglages ajoutés vont dans « opts » (jamais de dépassement)
 p = {"v": 2, "chaine_id": i, "video_id": fid, "video_nom": nom, "joints": joints, "origine": origine,
      "voix_studio": voix, "shorts_sous_titres": shorts_st,
-     "opts": {"finder": finder, "fond_dir": "chaine/" + i, "format_sortie": fmt, "recherche": rech}}
+     "opts": {"finder": finder, "fond_dir": "chaine/" + i, "format_sortie": fmt, "recherche": rech,
+              "mode": mode}}
 assert len(p) <= 10
 print(json.dumps({"event_type": "chaine-montage", "client_payload": p}, ensure_ascii=False))
 PY

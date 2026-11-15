@@ -109,6 +109,12 @@ on:
         type: choice
         default: normal
         options: [normal, "commentaire d'une vidéo"]
+      chaine_habillage_vertical:
+        description: "🔗 Chaîne — 📱 habillage de la vidéo montée en VERTICAL (l'horizontal ne change pas) : au hasard · newsroom · war room · story · actuel"
+        required: false
+        type: choice
+        default: au hasard
+        options: [au hasard, newsroom, war room, story, actuel]
 
 jobs:
   prepare:
@@ -154,6 +160,7 @@ jobs:
           CHAINE_FORMAT: ${{ github.event.inputs.chaine_format }}
           CHAINE_RECHERCHE: ${{ github.event.inputs.chaine_recherche }}
           CHAINE_MODE: ${{ github.event.inputs.chaine_mode }}
+          CHAINE_HABILLAGE_V: ${{ github.event.inputs.chaine_habillage_vertical }}
           PREVIEW: ${{ github.event.inputs.preview_seconds }}
           RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
           CHAINE_JETON_CONFIGURE: ${{ (vars.CHAINE_APP_ID != '' && secrets.CHAINE_APP_KEY != '') || secrets.CHAINE_TOKEN != '' }}
@@ -509,6 +516,7 @@ jobs:
           CHAINE_FORMAT: ${{ github.event.inputs.chaine_format }}
           CHAINE_RECHERCHE: ${{ github.event.inputs.chaine_recherche }}
           CHAINE_MODE: ${{ github.event.inputs.chaine_mode }}
+          CHAINE_HABILLAGE_V: ${{ github.event.inputs.chaine_habillage_vertical }}
           CHAINE_GH_TOKEN: ${{ steps.chaine_tok.outputs.token || secrets.CHAINE_TOKEN }}
           CHAINE_ID: ${{ needs.assemble.outputs.chaine_id }}
           CHAINE_VIDEO_ID: ${{ needs.assemble.outputs.video_id }}
